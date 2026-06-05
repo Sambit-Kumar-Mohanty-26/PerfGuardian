@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        build_type: [Release, Debug]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Phase 1+: uncomment to install LLVM/Clang dev libraries
+      # - name: Install LLVM (Ubuntu)
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y llvm-dev libclang-dev clang
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DPERFGUARDIAN_BUILD_TESTS=ON
+
+      - name: Build
+        run: |
+          JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+          cmake --build build --parallel "$JOBS"
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke — version string
+        run: ./build/bin/perfguardian --version
+
+      - name: Smoke — help text
+        run: ./build/bin/perfguardian --help
+
+      - name: Smoke — list-rules
+        run: ./build/bin/perfguardian list-rules
+
+      - name: Upload compile_commands.json
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-commands
+          path: build/compile_commands.json
+          if-no-files-found: ignore

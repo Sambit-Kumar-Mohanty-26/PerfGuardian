@@ -1,0 +1,49 @@
+# Build artifacts
+build/
+out/
+.cache/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+_CPack_Packages/
+*.cmake
+!cmake/deps.cmake
+
+# Compile commands (generated; keep the CI artifact, not the local copy)
+compile_commands.json
+
+# Binaries
+*.exe
+*.out
+*.app
+/build/bin/perfguardian
+/build/bin/perfguardian.exe
+
+# Object files / static libs
+*.o
+*.a
+*.lib
+*.pdb
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# PerfGuardian reports
+report.html
+report.json
+report.sarif
+
+# Dependencies fetched by FetchContent (not vendored)
+_deps/
+
+# Python (if any scripts added later)
+__pycache__/
+*.pyc
