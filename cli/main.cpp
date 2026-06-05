@@ -5,6 +5,11 @@
 #include <filesystem>
 #include "perfguardian/version.hpp"
 #include "perfguardian/project_loader.hpp"
+#include "perfguardian/symbol_db.hpp"
+#include "perfguardian/rules.hpp"
+#include "perfguardian/pg001.hpp"
+#include "perfguardian/diagnostic.hpp"
+#include "perfguardian/severity.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -24,14 +29,16 @@ static std::string truncate(const std::string& s, std::size_t max_len = 60) {
 static int cmd_list_rules() {
     std::cout << "PerfGuardian " << perfguardian::version_str << " — Rule Catalog\n";
     std::cout << "─────────────────────────────────────────────────────────\n";
-    std::cout << "  (No rules registered yet — coming in Phase 4)\n\n";
-    std::cout << "Planned rules:\n";
-    std::cout << "  PG001  large-object-by-value    HIGH    Phase 3\n";
-    std::cout << "  PG002  missing-const-ref         MEDIUM  Phase 4\n";
-    std::cout << "  PG003  reserve-before-loop       MEDIUM  Phase 4\n";
-    std::cout << "  PG004  find-in-loop              HIGH    Phase 4\n";
-    std::cout << "  PG005  unnecessary-temporary     LOW     Phase 4\n";
-    std::cout << "  PG006  repeated-map-lookup       MEDIUM  Phase 4\n";
+    auto rules = perfguardian::make_default_rules();
+    for (const auto& r : rules) {
+        std::cout << "  " << r->rule_id() << "  " << r->rule_name() << "\n";
+    }
+    std::cout << "\nPlanned (Phase 4+):\n";
+    std::cout << "  PG002  missing-const-ref         MEDIUM\n";
+    std::cout << "  PG003  reserve-before-loop       MEDIUM\n";
+    std::cout << "  PG004  find-in-loop              HIGH\n";
+    std::cout << "  PG005  unnecessary-temporary     LOW\n";
+    std::cout << "  PG006  repeated-map-lookup       MEDIUM\n";
     return 0;
 }
 
@@ -126,7 +133,7 @@ static int cmd_analyze(const std::string& path,
                        const std::string& /*json_out*/,
                        const std::string& /*html_out*/,
                        const std::string& /*sarif_out*/,
-                       const std::string& /*fail_on*/,
+                       const std::string& fail_on,
                        const std::string& /*baseline*/) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
@@ -159,11 +166,11 @@ static int cmd_analyze(const std::string& path,
         }
     }
 
+    // Phase 1: parse all translation units
+    perfguardian::SymbolDB db;
     int parsed = 0, failed = 0;
     for (const auto& src : sources) {
         std::vector<std::string> args = {"-std=c++20"};
-
-        // Look up compile command for this file
         if (has_compile_commands) {
             for (const auto& cmd : compile_commands) {
                 if (cmd.file == src && cmd.arguments.size() > 1) {
@@ -172,10 +179,10 @@ static int cmd_analyze(const std::string& path,
                 }
             }
         }
-
         auto result = perfguardian::parse_file(src, args);
         if (result.ok) {
             ++parsed;
+            db.add(result);
             std::cout << "  [ok]   " << fs::path(src).filename().string()
                       << "  (" << result.functions.size() << " fns, "
                       << result.types.size() << " types)\n";
@@ -184,12 +191,44 @@ static int cmd_analyze(const std::string& path,
             std::cout << "  [err]  " << fs::path(src).filename().string() << "\n";
         }
     }
+    std::cout << "\nParsed: " << parsed << " ok, " << failed << " failed"
+              << "  |  DB: " << db.function_count() << " functions, "
+              << db.type_count() << " types\n";
 
-    std::cout << "\nAnalyzed: " << parsed << " ok, " << failed << " failed\n";
-    std::cout << "(Rule engine not yet implemented — Phase 3)\n";
+    // Phase 3: run rule engine
+    auto rules = perfguardian::make_default_rules();
+    perfguardian::DiagnosticSink sink;
+    perfguardian::run_rules(db, sink, rules);
+
+    if (sink.empty()) {
+        std::cout << "\nNo issues found.\n";
+    } else {
+        std::cout << "\n" << sink.count() << " issue(s) found:\n";
+        std::cout << "─────────────────────────────────────────────────────────\n";
+        for (const auto& d : sink.all()) {
+            std::cout << "[" << d.rule_id << "] "
+                      << fs::path(d.location.file).filename().string()
+                      << ":" << d.location.line
+                      << "  " << d.message << "\n"
+                      << "  fix: " << d.suggested_fix << "\n";
+        }
+    }
+
+    // Honour --fail-on severity threshold
+    if (!fail_on.empty() && !sink.empty()) {
+        try {
+            auto min_sev = perfguardian::severity_from_string(fail_on);
+            if (!sink.with_severity(min_sev).empty()) {
+                return 1;
+            }
+        } catch (...) {
+            std::cerr << "Unknown severity '" << fail_on
+                      << "'. Valid: info low medium high critical\n";
+            return 2;
+        }
+    }
 #else
     std::cout << "(Clang integration not enabled — rebuild with -DPERFGUARDIAN_ENABLE_CLANG=ON)\n";
-    std::cout << "(Rule engine not yet implemented — Phase 3)\n";
 #endif
 
     return 0;

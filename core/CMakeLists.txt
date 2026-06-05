@@ -84,6 +84,9 @@ endif()
 # ── Core compiled library ─────────────────────────────────────────────────────
 set(CORE_SOURCES
     src/project_loader/project_loader.cpp
+    src/symbol_db/symbol_db.cpp   # Phase 2
+    src/rules/rules.cpp           # Phase 3
+    src/rules/pg001.cpp           # Phase 3
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)
