@@ -19,18 +19,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Phase 1+: uncomment to install LLVM/Clang dev libraries
-      # - name: Install LLVM (Ubuntu)
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y llvm-dev libclang-dev clang
+      - name: Install LLVM (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang
+
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
 
       - name: Configure CMake
+        shell: bash
         run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            LLVM_PREFIX="$(brew --prefix llvm)"
+            EXTRA="-DLLVM_INCLUDE_HINTS=${LLVM_PREFIX}/include -DLLVM_LIBRARY_HINTS=${LLVM_PREFIX}/lib"
+          fi
           cmake -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DPERFGUARDIAN_BUILD_TESTS=ON
+            -DPERFGUARDIAN_BUILD_TESTS=ON \
+            $EXTRA
 
       - name: Build
         run: |

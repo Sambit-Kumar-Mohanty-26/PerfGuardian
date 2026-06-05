@@ -59,7 +59,7 @@ static bool is_in_main_file(CXCursor cursor, const std::string& main_file) {
     std::string fname = cx_to_string(clang_getFileName(file));
     // Normalize to forward slashes for comparison
     for (auto& c : fname) if (c == '\\') c = '/';
-    std::string norm_main = main_file ? *main_file : "";
+    std::string norm_main = main_file;
     for (auto& c : norm_main) if (c == '\\') c = '/';
     return fname == norm_main;
 }
@@ -125,7 +125,17 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
             CXType cxtype = clang_getCursorType(cursor);
             long long sz  = clang_Type_getSizeOf(cxtype);
             td.size_bytes = (sz >= 0) ? sz : -1;
-            td.trivially_copyable = (clang_Type_isTrivially_copyable(cxtype) != 0);
+            // clang_Type_isTrivially_copyable is not available in all libclang
+            // versions; derive it conservatively from the canonical type kind.
+            {
+                CXType canonical = clang_getCanonicalType(cxtype);
+                CXTypeKind k = canonical.kind;
+                td.trivially_copyable =
+                    (k >= CXType_FirstBuiltin && k <= CXType_LastBuiltin) ||
+                    k == CXType_Enum;
+                // For record types we leave it false — the rule engine uses
+                // size_bytes instead, which is always reliable.
+            }
 
             data->result->types.push_back(std::move(td));
         }

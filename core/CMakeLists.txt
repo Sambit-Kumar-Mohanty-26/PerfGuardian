@@ -1,38 +1,82 @@
-# ── libclang import (Phase 1) ─────────────────────────────────────────────────
-# We link against libclang via a MinGW-compatible import library generated from
-# the DLL exports. The DLL itself ships with LLVM.
+# ── libclang import ────────────────────────────────────────────────────────────
+# We link against libclang via a MinGW-compatible import library on Windows
+# and via find_library on Linux/macOS. Clang integration is silently disabled
+# if libclang cannot be found rather than failing the configure step.
 #
-# To regenerate cmake/libclang.dll.a (only needed when updating LLVM):
-#   objdump -p "$LLVM_BIN/libclang.dll" | grep clang_ -> cmake/libclang.def
+# To regenerate cmake/libclang.dll.a (Windows, only needed when updating LLVM):
+#   objdump -p "$LLVM_BIN/libclang.dll" | grep clang_ > cmake/libclang.def
 #   dlltool -D libclang.dll -d cmake/libclang.def -l cmake/libclang.dll.a
 
 option(PERFGUARDIAN_ENABLE_CLANG "Enable Clang/LibClang AST parsing" ON)
 
 if(PERFGUARDIAN_ENABLE_CLANG)
-    # Locate LLVM headers and DLL
     if(WIN32)
-        set(LLVM_INCLUDE_HINT "C:/Program Files/LLVM/include")
-        set(LIBCLANG_IMPORT   "${CMAKE_SOURCE_DIR}/cmake/libclang.dll.a")
-        set(LIBCLANG_DLL      "C:/Program Files/LLVM/bin/libclang.dll")
+        set(_pg_clang_include "C:/Program Files/LLVM/include")
+        set(_pg_clang_implib  "${CMAKE_SOURCE_DIR}/cmake/libclang.dll.a")
+        set(_pg_clang_dll     "C:/Program Files/LLVM/bin/libclang.dll")
+        # Expose DLL path for post-build copy in cli/
+        set(PERFGUARDIAN_LIBCLANG_DLL "${_pg_clang_dll}" CACHE INTERNAL "")
+        if(NOT EXISTS "${_pg_clang_dll}")
+            message(STATUS "PerfGuardian: libclang.dll not found — CLANG integration disabled")
+            set(PERFGUARDIAN_ENABLE_CLANG OFF CACHE BOOL "" FORCE)
+        endif()
     else()
-        # Linux/macOS: use system LLVM via find_package or pkg-config
-        find_package(LLVM REQUIRED CONFIG)
-        find_package(Clang REQUIRED CONFIG)
-        set(LLVM_INCLUDE_HINT "${LLVM_INCLUDE_DIRS}")
-        set(LIBCLANG_IMPORT   "clang")
+        # Linux/macOS: locate headers and shared library without requiring
+        # CMake config files (not always installed with the dev packages).
+        find_path(_pg_clang_include clang-c/Index.h
+            HINTS
+                ${LLVM_INCLUDE_HINTS}        # caller may set via -DLLVM_INCLUDE_HINTS=...
+                /usr/include
+                /usr/local/include
+                /usr/lib/llvm-20/include
+                /usr/lib/llvm-19/include
+                /usr/lib/llvm-18/include
+                /usr/lib/llvm-17/include
+                /usr/lib/llvm-16/include
+                /usr/lib/llvm-15/include
+                /usr/lib/llvm-14/include
+                /opt/homebrew/opt/llvm/include
+                /usr/local/opt/llvm/include
+        )
+        find_library(_pg_clang_lib NAMES clang
+            HINTS
+                ${LLVM_LIBRARY_HINTS}        # caller may set via -DLLVM_LIBRARY_HINTS=...
+                /usr/lib/x86_64-linux-gnu
+                /usr/lib/aarch64-linux-gnu
+                /usr/lib
+                /usr/local/lib
+                /usr/lib/llvm-20/lib
+                /usr/lib/llvm-19/lib
+                /usr/lib/llvm-18/lib
+                /usr/lib/llvm-17/lib
+                /usr/lib/llvm-16/lib
+                /usr/lib/llvm-15/lib
+                /usr/lib/llvm-14/lib
+                /opt/homebrew/opt/llvm/lib
+                /usr/local/opt/llvm/lib
+        )
+        if(NOT _pg_clang_include OR NOT _pg_clang_lib)
+            message(STATUS "PerfGuardian: libclang not found — CLANG integration disabled "
+                           "(install llvm-dev / libclang-dev to enable)")
+            set(PERFGUARDIAN_ENABLE_CLANG OFF CACHE BOOL "" FORCE)
+        else()
+            message(STATUS "PerfGuardian: found libclang at ${_pg_clang_lib}")
+        endif()
     endif()
+endif()
 
+if(PERFGUARDIAN_ENABLE_CLANG)
     add_library(libclang_import SHARED IMPORTED GLOBAL)
     if(WIN32)
         set_target_properties(libclang_import PROPERTIES
-            IMPORTED_LOCATION   "${LIBCLANG_DLL}"
-            IMPORTED_IMPLIB     "${LIBCLANG_IMPORT}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LLVM_INCLUDE_HINT}"
+            IMPORTED_LOCATION             "${_pg_clang_dll}"
+            IMPORTED_IMPLIB               "${_pg_clang_implib}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_pg_clang_include}"
         )
     else()
         set_target_properties(libclang_import PROPERTIES
-            IMPORTED_LOCATION "${LIBCLANG_IMPORT}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LLVM_INCLUDE_HINT}"
+            IMPORTED_LOCATION             "${_pg_clang_lib}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_pg_clang_include}"
         )
     endif()
 endif()
