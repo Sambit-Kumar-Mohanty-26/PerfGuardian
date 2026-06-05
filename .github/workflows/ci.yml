@@ -40,6 +40,7 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DPERFGUARDIAN_BUILD_TESTS=ON \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             $EXTRA
 
       - name: Build
