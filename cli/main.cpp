@@ -17,14 +17,14 @@
 
 namespace fs = std::filesystem;
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// helpers
 
 static std::string truncate(const std::string& s, std::size_t max_len = 60) {
     if (s.size() <= max_len) return s;
     return s.substr(0, max_len - 3) + "...";
 }
 
-// ── subcommand handlers ───────────────────────────────────────────────────────
+// subcommand handlers
 
 static int cmd_list_rules() {
     std::cout << "PerfGuardian " << perfguardian::version_str << " — Rule Catalog\n";
@@ -33,12 +33,8 @@ static int cmd_list_rules() {
     for (const auto& r : rules) {
         std::cout << "  " << r->rule_id() << "  " << r->rule_name() << "\n";
     }
-    std::cout << "\nPlanned (Phase 4+):\n";
-    std::cout << "  PG002  missing-const-ref         MEDIUM\n";
-    std::cout << "  PG003  reserve-before-loop       MEDIUM\n";
-    std::cout << "  PG004  find-in-loop              HIGH\n";
-    std::cout << "  PG005  unnecessary-temporary     LOW\n";
-    std::cout << "  PG006  repeated-map-lookup       MEDIUM\n";
+    std::cout << "\nPlanned (Phase 5+):\n";
+    std::cout << "  (hotspot ranker, JSON/HTML/SARIF reports, .yaml config)\n";
     return 0;
 }
 
@@ -234,7 +230,7 @@ static int cmd_analyze(const std::string& path,
     return 0;
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+// main
 
 int main(int argc, char** argv) {
     CLI::App app{"C++ performance analyzer and automated code reviewer"};
@@ -242,7 +238,7 @@ int main(int argc, char** argv) {
     app.set_version_flag("-V,--version", perfguardian::version_string());
     app.require_subcommand(0, 1);
 
-    // ── analyze ──────────────────────────────────────────────────────────────
+    // analyze 
     auto* analyze_cmd = app.add_subcommand("analyze", "Analyze a C++ project for performance issues");
     std::string analyze_path = ".";
     std::string json_out, html_out, sarif_out, fail_on, baseline;
@@ -254,10 +250,10 @@ int main(int argc, char** argv) {
     analyze_cmd->add_option("--fail-on",  fail_on,   "Exit non-zero if any issue at or above SEVERITY");
     analyze_cmd->add_option("--baseline", baseline,  "Compare against a previous JSON report");
 
-    // ── list-rules ───────────────────────────────────────────────────────────
+    // list-rules 
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
 
-    // ── dump-ast ─────────────────────────────────────────────────────────────
+    // dump-ast
     auto* dump_ast_cmd = app.add_subcommand(
         "dump-ast", "Dump AST of a source file (requires compile_commands.json)");
     std::string dump_ast_file;

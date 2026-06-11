@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <string>
 #include "perfguardian/version.hpp"
 #include "perfguardian/parse_result.hpp"
@@ -6,6 +7,11 @@
 #include "perfguardian/diagnostic.hpp"
 #include "perfguardian/rules.hpp"
 #include "perfguardian/pg001.hpp"
+#include "perfguardian/pg002.hpp"
+#include "perfguardian/pg003.hpp"
+#include "perfguardian/pg004.hpp"
+#include "perfguardian/pg005.hpp"
+#include "perfguardian/pg006.hpp"
 
 // ── Version header ─────────────────────────────────────────────────────────────
 
@@ -257,4 +263,368 @@ TEST(PG001, MakeDefaultRulesContainsPG001) {
         if (r->rule_id() == "PG001") { found = true; break; }
     }
     EXPECT_TRUE(found);
+}
+
+// ── Phase 4 helpers ───────────────────────────────────────────────────────────
+
+namespace {
+
+perfguardian::CallSite make_call(const std::string& callee,
+                                  bool inside_loop = false,
+                                  int  loop_depth  = 0,
+                                  int  line        = 1) {
+    perfguardian::CallSite cs;
+    cs.callee      = callee;
+    cs.inside_loop = inside_loop;
+    cs.loop_depth  = loop_depth;
+    cs.line        = line;
+    return cs;
+}
+
+perfguardian::LocalVar make_local(const std::string& name,
+                                   const std::string& type,
+                                   long long size,
+                                   bool is_ref = false,
+                                   bool is_ptr = false) {
+    perfguardian::LocalVar lv;
+    lv.name            = name;
+    lv.type_spelling   = type;
+    lv.type_size_bytes = size;
+    lv.is_reference    = is_ref;
+    lv.is_pointer      = is_ptr;
+    lv.line            = 5;
+    return lv;
+}
+
+perfguardian::ParseResult make_result_with_calls(
+    const std::string& fn_name,
+    std::vector<perfguardian::CallSite> calls) {
+    perfguardian::ParseResult r;
+    r.source_file = "test.cpp";
+    perfguardian::FunctionDecl fn;
+    fn.qualified_name = fn_name;
+    fn.file           = "test.cpp";
+    fn.line           = 1;
+    fn.call_sites     = std::move(calls);
+    r.functions.push_back(fn);
+    return r;
+}
+
+perfguardian::ParseResult make_result_with_locals(
+    const std::string& fn_name,
+    std::vector<perfguardian::LocalVar> locals) {
+    perfguardian::ParseResult r;
+    r.source_file = "test.cpp";
+    perfguardian::FunctionDecl fn;
+    fn.qualified_name = fn_name;
+    fn.file           = "test.cpp";
+    fn.line           = 1;
+    fn.local_vars     = std::move(locals);
+    r.functions.push_back(fn);
+    return r;
+}
+
+}  // namespace
+
+// ── PG002 — missing-const-ref ─────────────────────────────────────────────────
+
+TEST(PG002, FlagsNonConstRefLargeParam) {
+    perfguardian::SymbolDB db;
+    perfguardian::ParamInfo p;
+    p.name            = "player";
+    p.type_spelling   = "Player";
+    p.type_size_bytes = 800;
+    p.is_reference    = true;
+    p.is_const        = false;
+    p.is_pointer      = false;
+    p.is_rvalue_ref   = false;
+    db.add(make_result_with_function("updatePlayer", {p}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG002 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG002");
+    EXPECT_EQ(sink.all()[0].severity, perfguardian::Severity::Medium);
+    EXPECT_NE(sink.all()[0].suggested_fix.find("const"), std::string::npos);
+}
+
+TEST(PG002, SkipsConstRef) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_function(
+        "printPlayer",
+        {make_param("p", "Player", 800, /*ref=*/true)}));  // is_const=true via make_param
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG002 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG002, SkipsByValue) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_function(
+        "fn", {make_param("p", "Player", 800)}));  // by value, PG001 handles this
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG002 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG002, SkipsSmallNonConstRef) {
+    perfguardian::SymbolDB db;
+    perfguardian::ParamInfo p;
+    p.name            = "x";
+    p.type_spelling   = "int";
+    p.type_size_bytes = 4;
+    p.is_reference    = true;
+    p.is_const        = false;
+    p.is_pointer      = false;
+    p.is_rvalue_ref   = false;
+    db.add(make_result_with_function("fn", {p}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG002 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+// ── PG003 — reserve-before-loop ───────────────────────────────────────────────
+
+TEST(PG003, FlagsPushBackInLoopWithoutReserve) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("buildList", {
+        make_call("push_back", /*inside_loop=*/true, 1, 10),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG003 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG003");
+    EXPECT_NE(sink.all()[0].suggested_fix.find("reserve"), std::string::npos);
+}
+
+TEST(PG003, OkWhenReservePresent) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("buildList", {
+        make_call("reserve",   false),
+        make_call("push_back", true, 1),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG003 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG003, OkWhenPushBackOutsideLoop) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("appendOne", {
+        make_call("push_back", false),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG003 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG003, FlagsEmplaceBackToo) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("build", {
+        make_call("emplace_back", true, 1),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG003 rule;
+    rule.run(db, sink, {});
+    EXPECT_EQ(sink.count(), 1u);
+}
+
+// ── PG004 — find-in-loop ──────────────────────────────────────────────────────
+
+TEST(PG004, FlagsFindInsideLoop) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("lookupAll", {
+        make_call("find", true, 1, 20),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG004 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG004");
+    EXPECT_EQ(sink.all()[0].severity, perfguardian::Severity::High);
+    EXPECT_EQ(sink.all()[0].metrics.loop_depth, 1);
+}
+
+TEST(PG004, SkipsFindOutsideLoop) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("lookup", {
+        make_call("find", false),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG004 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG004, FlagsCountInsideLoop) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("fn", {
+        make_call("count", true, 2),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG004 rule;
+    rule.run(db, sink, {});
+    EXPECT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].metrics.loop_depth, 2);
+}
+
+// ── PG005 — large-local-copy ──────────────────────────────────────────────────
+
+TEST(PG005, FlagsLargeLocalByValue) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_locals("process", {
+        make_local("state", "GameState", 1200),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG005 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG005");
+    EXPECT_EQ(sink.all()[0].severity, perfguardian::Severity::Low);
+    EXPECT_EQ(sink.all()[0].metrics.type_size_bytes, 1200);
+}
+
+TEST(PG005, SkipsReference) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_locals("process", {
+        make_local("state", "GameState", 1200, /*ref=*/true),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG005 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG005, SkipsSmallLocal) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_locals("fn", {
+        make_local("x", "int", 4),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG005 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG005, RespectsCustomThreshold) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_locals("fn", {
+        make_local("v", "Vec3", 12),
+    }));
+
+    perfguardian::RuleConfig cfg;
+    perfguardian::DiagnosticSink sink_default;
+    perfguardian::RulePG005 rule;
+
+    // Default pg005 threshold is 32 — 12 bytes should NOT fire
+    rule.run(db, sink_default, cfg);
+    EXPECT_TRUE(sink_default.empty());
+
+    // Lower threshold — 12 bytes SHOULD fire
+    cfg.pg005_copy_size_threshold = 8;
+    perfguardian::DiagnosticSink sink_low;
+    rule.run(db, sink_low, cfg);
+    EXPECT_EQ(sink_low.count(), 1u);
+}
+
+// ── PG006 — repeated-map-lookup ───────────────────────────────────────────────
+
+TEST(PG006, FlagsRepeatedFind) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("doWork", {
+        make_call("find", false, 0, 5),
+        make_call("find", false, 0, 8),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG006");
+    EXPECT_EQ(sink.all()[0].severity, perfguardian::Severity::Medium);
+    EXPECT_EQ(sink.all()[0].metrics.lookup_count, 2);
+}
+
+TEST(PG006, SkipsSingleFind) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("doWork", {
+        make_call("find", false, 0, 5),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(PG006, FlagsRepeatedOperatorBracket) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("fn", {
+        make_call("operator[]", false, 0, 3),
+        make_call("operator[]", false, 0, 7),
+        make_call("operator[]", false, 0, 11),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].metrics.lookup_count, 3);
+}
+
+TEST(PG006, RespectsMinRepeatConfig) {
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_calls("fn", {
+        make_call("find", false, 0, 5),
+        make_call("find", false, 0, 9),
+    }));
+
+    // Default min_repeat=2 — should fire
+    perfguardian::DiagnosticSink sink2;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink2, {});
+    EXPECT_EQ(sink2.count(), 1u);
+
+    // Raise threshold to 3 — should NOT fire
+    perfguardian::RuleConfig cfg;
+    cfg.pg006_min_repeat_count = 3;
+    perfguardian::DiagnosticSink sink3;
+    rule.run(db, sink3, cfg);
+    EXPECT_TRUE(sink3.empty());
+}
+
+TEST(PG006, AllRulesRegistered) {
+    auto rules = perfguardian::make_default_rules();
+    std::vector<std::string> ids;
+    for (const auto& r : rules) ids.push_back(std::string(r->rule_id()));
+    for (const auto& expected : {"PG001","PG002","PG003","PG004","PG005","PG006"}) {
+        EXPECT_NE(std::find(ids.begin(), ids.end(), expected), ids.end())
+            << expected << " not registered";
+    }
 }

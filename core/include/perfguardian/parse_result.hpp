@@ -15,6 +15,26 @@ struct ParamInfo {
     bool        is_rvalue_ref;   // true for T&&
 };
 
+// A call expression captured inside a function body (Phase 4)
+struct CallSite {
+    std::string callee;           // method/function name, e.g. "push_back", "find"
+    bool        inside_loop = false;
+    int         loop_depth  = 0;
+    std::string file;
+    int         line = 0;
+};
+
+// A local variable declaration inside a function body (Phase 4)
+struct LocalVar {
+    std::string name;
+    std::string type_spelling;
+    long long   type_size_bytes = -1;
+    bool        is_reference    = false;
+    bool        is_pointer      = false;
+    std::string file;
+    int         line = 0;
+};
+
 // A function or method declaration
 struct FunctionDecl {
     std::string qualified_name;  // e.g. "ns::MyClass::method"
@@ -23,6 +43,8 @@ struct FunctionDecl {
     int         line    = 0;
     int         column  = 0;
     std::vector<ParamInfo> params;
+    std::vector<CallSite>  call_sites;  // Phase 4: body-level call expressions
+    std::vector<LocalVar>  local_vars;  // Phase 4: local variable declarations
 };
 
 // A user-defined type (class/struct)

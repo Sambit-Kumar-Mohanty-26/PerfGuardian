@@ -6,8 +6,9 @@
 namespace perfguardian {
 
 struct ClangParserOptions {
-    std::vector<std::string> extra_args;  // additional -I, -D flags
-    bool                     verbose = false;
+    std::vector<std::string> extra_args;   // additional -I, -D flags
+    bool                     verbose       = false;
+    bool                     parse_bodies  = true;  // collect call sites + local vars
 };
 
 // Parse a single C++ source file using libclang.

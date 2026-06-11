@@ -10,7 +10,13 @@ namespace perfguardian {
 // Per-run tuning knobs; all rules read only the fields they care about.
 struct RuleConfig {
     // PG001: flag by-value parameters whose type exceeds this size (bytes).
-    int pg001_size_threshold_bytes = 16;
+    int pg001_size_threshold_bytes  = 16;
+    // PG002: flag non-const reference parameters whose type exceeds this size.
+    int pg002_size_threshold_bytes  = 16;
+    // PG005: flag large-type local variable copies above this size.
+    int pg005_copy_size_threshold   = 32;
+    // PG006: flag map lookup callees repeated at least this many times.
+    int pg006_min_repeat_count      = 2;
 };
 
 // Interface every rule must implement.
