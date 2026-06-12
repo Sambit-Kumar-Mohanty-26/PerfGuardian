@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # Build binaries
+  build:
+    name: Build / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            artifact: perfguardian-linux-x86_64.tar.gz
+
+          - os: macos-13
+            target: macos-x86_64
+            artifact: perfguardian-macos-x86_64.tar.gz
+
+          - os: macos-14
+            target: macos-arm64
+            artifact: perfguardian-macos-arm64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev clang cmake ninja-build
+
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm cmake ninja
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            LLVM_PREFIX="$(brew --prefix llvm)"
+            EXTRA="-DLLVM_INCLUDE_HINTS=${LLVM_PREFIX}/include -DLLVM_LIBRARY_HINTS=${LLVM_PREFIX}/lib"
+          fi
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPERFGUARDIAN_BUILD_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            $EXTRA
+
+      - name: Build
+        run: |
+          JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+          cmake --build build --parallel "$JOBS"
+
+      - name: Strip binary
+        shell: bash
+        run: strip build/bin/perfguardian
+
+      - name: Smoke test
+        run: ./build/bin/perfguardian --version
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"          # e.g. v0.1.0
+          ARTIFACT="${{ matrix.artifact }}"
+          mkdir -p dist
+          cp build/bin/perfguardian dist/
+          cp LICENSE dist/ 2>/dev/null || true
+          cd dist
+          tar czf "../${ARTIFACT}" perfguardian LICENSE 2>/dev/null || \
+          tar czf "../${ARTIFACT}" perfguardian
+          cd ..
+          # SHA256 — Linux uses sha256sum, macOS uses shasum -a 256
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
+          else
+            shasum -a 256 "${ARTIFACT}" > "${ARTIFACT}.sha256"
+          fi
+          echo "Built ${ARTIFACT}"
+          cat "${ARTIFACT}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+          retention-days: 1
+
+  # Create GitHub Release
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PerfGuardian ${{ github.ref_name }}
+          body: |
+            ## PerfGuardian ${{ github.ref_name }}
+
+            Static performance analyser for C++20 codebases.
+
+            ### Install
+
+            **macOS / Linux (Homebrew)**
+            ```bash
+            brew tap ${{ github.repository_owner }}/tap
+            brew install perfguardian
+            ```
+
+            **Linux (direct download)**
+            ```bash
+            curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/perfguardian-linux-x86_64.tar.gz | tar xz
+            sudo mv perfguardian /usr/local/bin/
+            ```
+
+            **Universal install script**
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash
+            ```
+
+            ### Usage
+            ```bash
+            perfguardian analyze /path/to/your/cpp/project
+            perfguardian analyze . --json report.json --html report.html --sarif report.sarif
+            ```
+
+            ### Checksums
+            SHA256 checksums are provided as `.sha256` files alongside each binary.
+
+            ### What's changed
+          generate_release_notes: true
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.sha256
+          fail_on_unmatched_files: true
