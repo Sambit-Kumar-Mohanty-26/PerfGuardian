@@ -94,6 +94,7 @@ set(CORE_SOURCES
     src/rules/pg006.cpp                # Phase 4
     src/analysis/hotspot.cpp           # Phase 5
     src/analysis/json_report.cpp       # Phase 6
+    src/analysis/html_report.cpp       # Phase 7
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)

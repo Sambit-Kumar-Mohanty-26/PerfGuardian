@@ -12,6 +12,7 @@
 #include "perfguardian/severity.hpp"
 #include "perfguardian/hotspot.hpp"
 #include "perfguardian/json_report.hpp"
+#include "perfguardian/html_report.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -129,7 +130,7 @@ static int cmd_dump_ast(const std::string& filepath) {
 
 static int cmd_analyze(const std::string& path,
                        const std::string& json_out,
-                       const std::string& /*html_out*/,
+                       const std::string& html_out,
                        const std::string& /*sarif_out*/,
                        const std::string& fail_on,
                        const std::string& /*baseline*/) {
@@ -206,6 +207,16 @@ static int cmd_analyze(const std::string& path,
         try {
             perfguardian::write_json_report(json_out, report, sink);
             std::cout << "\nJSON report written to: " << json_out << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: " << e.what() << "\n";
+        }
+    }
+
+    // Phase 7: HTML dashboard
+    if (!html_out.empty()) {
+        try {
+            perfguardian::write_html_report(html_out, report, sink);
+            std::cout << "HTML dashboard written to: " << html_out << "\n";
         } catch (const std::exception& e) {
             std::cerr << "Warning: " << e.what() << "\n";
         }

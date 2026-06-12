@@ -15,6 +15,7 @@
 #include "perfguardian/pg006.hpp"
 #include "perfguardian/hotspot.hpp"
 #include "perfguardian/json_report.hpp"
+#include "perfguardian/html_report.hpp"
 #include <nlohmann/json.hpp>
 
 // Version header
@@ -884,6 +885,97 @@ TEST(JsonReport, WriteAndReadFile) {
     ASSERT_TRUE(in.is_open());
     auto js = nlohmann::json::parse(in);
     EXPECT_EQ(js["summary"]["total_issues"].get<int>(), 3);
+
+    std::remove(tmp.c_str());
+}
+
+// ── Phase 7 — HTML dashboard ──────────────────────────────────────────────────
+
+TEST(HtmlReport, ContainsDoctype) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsVersionString) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("0.1.0"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsTotalIssueCount) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    // The summary card shows "3" and the section heading "All Issues (3)"
+    EXPECT_NE(html.find("All Issues (3)"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsSeverityClasses) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("sev-high"),   std::string::npos);
+    EXPECT_NE(html.find("sev-medium"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsRuleIds) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("PG001"), std::string::npos);
+    EXPECT_NE(html.find("PG003"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsFunctionNames) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("ns::Player::update"), std::string::npos);
+    EXPECT_NE(html.find("ns::World::tick"),    std::string::npos);
+}
+
+TEST(HtmlReport, HtmlEscapesSpecialChars) {
+    // Function name with angle brackets should be escaped
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "foo<Bar>", "x.cpp", 1,
+                         perfguardian::Severity::High));
+    auto report = perfguardian::rank_hotspots(sink);
+    auto html   = perfguardian::to_html_string(report, sink);
+    // Raw < and > must not appear inside tag content
+    EXPECT_EQ(html.find("foo<Bar>"), std::string::npos);
+    EXPECT_NE(html.find("foo&lt;Bar&gt;"), std::string::npos);
+}
+
+TEST(HtmlReport, EmptySinkProducesValidHtml) {
+    perfguardian::DiagnosticSink empty_sink;
+    auto empty_report = perfguardian::rank_hotspots(empty_sink);
+    auto html = perfguardian::to_html_string(empty_report, empty_sink);
+    EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
+    EXPECT_NE(html.find("All Issues (0)"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsEmbeddedStyle) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("<style>"), std::string::npos);
+    EXPECT_NE(html.find("</style>"), std::string::npos);
+}
+
+TEST(HtmlReport, ContainsEmbeddedScript) {
+    JsonTestFixture f;
+    auto html = perfguardian::to_html_string(f.report, f.sink);
+    EXPECT_NE(html.find("<script>"), std::string::npos);
+    EXPECT_NE(html.find("</script>"), std::string::npos);
+}
+
+TEST(HtmlReport, WriteAndReadFile) {
+    JsonTestFixture f;
+    const std::string tmp = "perfguardian_test_report.html";
+    ASSERT_NO_THROW(perfguardian::write_html_report(tmp, f.report, f.sink));
+
+    std::ifstream in(tmp);
+    ASSERT_TRUE(in.is_open());
+    std::string content((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("<!DOCTYPE html>"), std::string::npos);
+    EXPECT_NE(content.find("All Issues (3)"),  std::string::npos);
 
     std::remove(tmp.c_str());
 }
