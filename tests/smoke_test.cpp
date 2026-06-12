@@ -18,6 +18,7 @@
 #include "perfguardian/html_report.hpp"
 #include "perfguardian/config.hpp"
 #include "perfguardian/sarif_report.hpp"
+#include "perfguardian/baseline.hpp"
 #include <nlohmann/json.hpp>
 
 // Version header
@@ -1266,4 +1267,116 @@ TEST(SarifReport, WriteAndReadFile) {
     EXPECT_EQ(js["runs"][0]["results"].size(), 3u);
 
     std::remove(tmp.c_str());
+}
+
+// ── Phase 10 — Baseline diffing ───────────────────────────────────────────────
+
+// Helper: write a JSON report from a sink, return its path
+static std::string write_tmp_json(const std::string& name,
+                                   const perfguardian::DiagnosticSink& sink) {
+    auto report = perfguardian::rank_hotspots(sink);
+    perfguardian::write_json_report(name, report, sink);
+    return name;
+}
+
+TEST(Baseline, EmptyBaselineAllNew) {
+    perfguardian::DiagnosticSink current;
+    current.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+    current.emit(make_diag("PG003", "fn", "b.cpp", 20, perfguardian::Severity::Medium));
+
+    auto diff = perfguardian::diff_baseline(current, {});
+    EXPECT_EQ(diff.new_count(),        2);
+    EXPECT_EQ(diff.fixed_count(),      0);
+    EXPECT_EQ(diff.persisting_count(), 0);
+}
+
+TEST(Baseline, IdenticalBaselineAllPersisting) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+
+    auto path = write_tmp_json("pg_baseline_persist.json", sink);
+    auto baseline = perfguardian::load_baseline(path);
+    auto diff = perfguardian::diff_baseline(sink, baseline);
+
+    EXPECT_EQ(diff.new_count(),        0);
+    EXPECT_EQ(diff.fixed_count(),      0);
+    EXPECT_EQ(diff.persisting_count(), 1);
+    std::remove(path.c_str());
+}
+
+TEST(Baseline, RemovedIssueAppearsFixed) {
+    perfguardian::DiagnosticSink old_sink;
+    old_sink.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+    old_sink.emit(make_diag("PG003", "fn", "b.cpp", 20, perfguardian::Severity::Medium));
+
+    auto path = write_tmp_json("pg_baseline_fixed.json", old_sink);
+    auto baseline = perfguardian::load_baseline(path);
+
+    // Current run only has PG003
+    perfguardian::DiagnosticSink current;
+    current.emit(make_diag("PG003", "fn", "b.cpp", 20, perfguardian::Severity::Medium));
+
+    auto diff = perfguardian::diff_baseline(current, baseline);
+    EXPECT_EQ(diff.new_count(),        0);
+    EXPECT_EQ(diff.fixed_count(),      1);
+    EXPECT_EQ(diff.persisting_count(), 1);
+    std::remove(path.c_str());
+}
+
+TEST(Baseline, NewIssueDetected) {
+    perfguardian::DiagnosticSink old_sink;
+    old_sink.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+
+    auto path = write_tmp_json("pg_baseline_new.json", old_sink);
+    auto baseline = perfguardian::load_baseline(path);
+
+    perfguardian::DiagnosticSink current;
+    current.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+    current.emit(make_diag("PG004", "fn", "c.cpp",  5, perfguardian::Severity::Medium));
+
+    auto diff = perfguardian::diff_baseline(current, baseline);
+    EXPECT_EQ(diff.new_count(),        1);
+    EXPECT_EQ(diff.fixed_count(),      0);
+    EXPECT_EQ(diff.persisting_count(), 1);
+    EXPECT_EQ(diff.new_issues[0].rule_id, "PG004");
+    std::remove(path.c_str());
+}
+
+TEST(Baseline, LineNumberChangeIsStillPersisting) {
+    perfguardian::DiagnosticSink old_sink;
+    old_sink.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+
+    auto path = write_tmp_json("pg_baseline_line.json", old_sink);
+    auto baseline = perfguardian::load_baseline(path);
+
+    // Same rule+file+message, different line (e.g. after an edit above it)
+    perfguardian::DiagnosticSink current;
+    current.emit(make_diag("PG001", "fn", "a.cpp", 15, perfguardian::Severity::High));
+
+    auto diff = perfguardian::diff_baseline(current, baseline);
+    EXPECT_EQ(diff.new_count(),        0);
+    EXPECT_EQ(diff.persisting_count(), 1);
+    std::remove(path.c_str());
+}
+
+TEST(Baseline, MissingBaselineFileThrows) {
+    EXPECT_THROW(
+        perfguardian::load_baseline("/nonexistent/baseline.json"),
+        std::runtime_error
+    );
+}
+
+TEST(Baseline, EmptyCurrentAllFixed) {
+    perfguardian::DiagnosticSink old_sink;
+    old_sink.emit(make_diag("PG001", "fn", "a.cpp", 10, perfguardian::Severity::High));
+
+    auto path = write_tmp_json("pg_baseline_all_fixed.json", old_sink);
+    auto baseline = perfguardian::load_baseline(path);
+
+    perfguardian::DiagnosticSink empty;
+    auto diff = perfguardian::diff_baseline(empty, baseline);
+    EXPECT_EQ(diff.new_count(),        0);
+    EXPECT_EQ(diff.fixed_count(),      1);
+    EXPECT_EQ(diff.persisting_count(), 0);
+    std::remove(path.c_str());
 }

@@ -90,7 +90,7 @@ PerfGuardianConfig::filter_rules(std::vector<std::unique_ptr<IRule>> rules) cons
     return rules;
 }
 
-// ── YAML parsing ──────────────────────────────────────────────────────────────
+// YAML parsing
 
 PerfGuardianConfig parse_config(const std::string& yaml_content) {
     PerfGuardianConfig cfg;

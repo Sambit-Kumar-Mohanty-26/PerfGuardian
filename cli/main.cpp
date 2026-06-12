@@ -15,6 +15,7 @@
 #include "perfguardian/html_report.hpp"
 #include "perfguardian/config.hpp"
 #include "perfguardian/sarif_report.hpp"
+#include "perfguardian/baseline.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -135,7 +136,7 @@ static int cmd_analyze(const std::string& path,
                        const std::string& html_out,
                        const std::string& sarif_out,
                        const std::string& fail_on,
-                       const std::string& /*baseline*/) {
+                       const std::string& baseline_path) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -246,6 +247,19 @@ static int cmd_analyze(const std::string& path,
         }
     }
 
+    // Phase 10: baseline diff
+    bool has_new_issues = false;
+    if (!baseline_path.empty()) {
+        try {
+            auto baseline = perfguardian::load_baseline(baseline_path);
+            auto diff = perfguardian::diff_baseline(sink, baseline);
+            perfguardian::print_baseline_diff(diff);
+            has_new_issues = diff.new_count() > 0;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: baseline diff failed: " << e.what() << "\n";
+        }
+    }
+
     // Detailed issue list
     if (!sink.empty()) {
         std::cout << "\nAll issues:\n";
@@ -259,12 +273,15 @@ static int cmd_analyze(const std::string& path,
         }
     }
 
-    // Honour --fail-on severity threshold
+    // Honour --fail-on severity threshold.
+    // With --baseline, fail only when there are NEW issues at that severity.
     if (!fail_on.empty() && !sink.empty()) {
         try {
             auto min_sev = perfguardian::severity_from_string(fail_on);
-            if (!sink.with_severity(min_sev).empty()) {
-                return 1;
+            if (!baseline_path.empty()) {
+                if (has_new_issues) return 1;
+            } else {
+                if (!sink.with_severity(min_sev).empty()) return 1;
             }
         } catch (...) {
             std::cerr << "Unknown severity '" << fail_on
