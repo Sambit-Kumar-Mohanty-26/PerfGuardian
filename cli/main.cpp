@@ -14,6 +14,7 @@
 #include "perfguardian/json_report.hpp"
 #include "perfguardian/html_report.hpp"
 #include "perfguardian/config.hpp"
+#include "perfguardian/sarif_report.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -132,7 +133,7 @@ static int cmd_dump_ast(const std::string& filepath) {
 static int cmd_analyze(const std::string& path,
                        const std::string& json_out,
                        const std::string& html_out,
-                       const std::string& /*sarif_out*/,
+                       const std::string& sarif_out,
                        const std::string& fail_on,
                        const std::string& /*baseline*/) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
@@ -230,6 +231,16 @@ static int cmd_analyze(const std::string& path,
         try {
             perfguardian::write_html_report(html_out, report, sink);
             std::cout << "HTML dashboard written to: " << html_out << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: " << e.what() << "\n";
+        }
+    }
+
+    // Phase 9: SARIF report
+    if (!sarif_out.empty()) {
+        try {
+            perfguardian::write_sarif_report(sarif_out, report, sink, path);
+            std::cout << "SARIF report written to: " << sarif_out << "\n";
         } catch (const std::exception& e) {
             std::cerr << "Warning: " << e.what() << "\n";
         }

@@ -96,6 +96,7 @@ set(CORE_SOURCES
     src/analysis/json_report.cpp       # Phase 6
     src/analysis/html_report.cpp       # Phase 7
     src/config/config.cpp              # Phase 8
+    src/analysis/sarif_report.cpp      # Phase 9
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)

@@ -60,6 +60,33 @@ jobs:
       - name: Smoke — list-rules
         run: ./build/bin/perfguardian list-rules
 
+      - name: Self-scan — analyze PerfGuardian source and emit SARIF
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        run: |
+          ./build/bin/perfguardian analyze . \
+            --sarif results.sarif \
+            --json  results.json  \
+            --html  results.html  || true
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: perfguardian
+        continue-on-error: true
+
+      - name: Upload HTML report
+        if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perfguardian-report
+          path: |
+            results.sarif
+            results.json
+            results.html
+          if-no-files-found: ignore
+
       - name: Upload compile_commands.json
         if: matrix.os == 'ubuntu-latest' && matrix.build_type == 'Release'
         uses: actions/upload-artifact@v4

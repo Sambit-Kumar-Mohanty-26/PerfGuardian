@@ -17,6 +17,7 @@
 #include "perfguardian/json_report.hpp"
 #include "perfguardian/html_report.hpp"
 #include "perfguardian/config.hpp"
+#include "perfguardian/sarif_report.hpp"
 #include <nlohmann/json.hpp>
 
 // Version header
@@ -1162,4 +1163,107 @@ TEST(Config, InvalidYamlThrows) {
         perfguardian::parse_config(": bad: yaml: {"),
         std::runtime_error
     );
+}
+
+// ── Phase 9 — SARIF report ────────────────────────────────────────────────────
+
+TEST(SarifReport, TopLevelSchema) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(f.report, f.sink));
+    EXPECT_EQ(js["version"].get<std::string>(), "2.1.0");
+    EXPECT_TRUE(js.contains("$schema"));
+    EXPECT_TRUE(js.contains("runs"));
+    EXPECT_EQ(js["runs"].size(), 1u);
+}
+
+TEST(SarifReport, ToolDriverName) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(f.report, f.sink));
+    auto& driver = js["runs"][0]["tool"]["driver"];
+    EXPECT_EQ(driver["name"].get<std::string>(), "PerfGuardian");
+    EXPECT_TRUE(driver.contains("version"));
+    EXPECT_TRUE(driver.contains("rules"));
+}
+
+TEST(SarifReport, RulesArrayContainsPG001) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(f.report, f.sink));
+    auto& rules = js["runs"][0]["tool"]["driver"]["rules"];
+    bool found = false;
+    for (const auto& r : rules) {
+        if (r["id"].get<std::string>() == "PG001") { found = true; break; }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(SarifReport, ResultCountMatchesDiagnostics) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(f.report, f.sink));
+    EXPECT_EQ(js["runs"][0]["results"].size(), 3u);
+}
+
+TEST(SarifReport, ResultHasRequiredFields) {
+    JsonTestFixture f;
+    auto js  = nlohmann::json::parse(perfguardian::to_sarif_string(f.report, f.sink));
+    auto& r0 = js["runs"][0]["results"][0];
+    EXPECT_TRUE(r0.contains("ruleId"));
+    EXPECT_TRUE(r0.contains("level"));
+    EXPECT_TRUE(r0.contains("message"));
+    EXPECT_TRUE(r0.contains("locations"));
+    EXPECT_FALSE(r0["locations"].empty());
+}
+
+TEST(SarifReport, HighSeverityMapsToError) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "fn", "f.cpp", 1, perfguardian::Severity::High));
+    auto report = perfguardian::rank_hotspots(sink);
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(report, sink));
+    EXPECT_EQ(js["runs"][0]["results"][0]["level"].get<std::string>(), "error");
+}
+
+TEST(SarifReport, MediumSeverityMapsToWarning) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG003", "fn", "f.cpp", 1, perfguardian::Severity::Medium));
+    auto report = perfguardian::rank_hotspots(sink);
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(report, sink));
+    EXPECT_EQ(js["runs"][0]["results"][0]["level"].get<std::string>(), "warning");
+}
+
+TEST(SarifReport, LowSeverityMapsToNote) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG005", "fn", "f.cpp", 1, perfguardian::Severity::Low));
+    auto report = perfguardian::rank_hotspots(sink);
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(report, sink));
+    EXPECT_EQ(js["runs"][0]["results"][0]["level"].get<std::string>(), "note");
+}
+
+TEST(SarifReport, LocationLineNumber) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "fn", "player.cpp", 42, perfguardian::Severity::High));
+    auto report = perfguardian::rank_hotspots(sink);
+    auto js = nlohmann::json::parse(perfguardian::to_sarif_string(report, sink));
+    auto& region = js["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
+    EXPECT_EQ(region["startLine"].get<int>(), 42);
+}
+
+TEST(SarifReport, EmptySinkProducesValidSarif) {
+    perfguardian::DiagnosticSink empty_sink;
+    auto empty_report = perfguardian::rank_hotspots(empty_sink);
+    auto js = nlohmann::json::parse(
+        perfguardian::to_sarif_string(empty_report, empty_sink));
+    EXPECT_EQ(js["runs"][0]["results"].size(), 0u);
+}
+
+TEST(SarifReport, WriteAndReadFile) {
+    JsonTestFixture f;
+    const std::string tmp = "perfguardian_test_report.sarif";
+    ASSERT_NO_THROW(perfguardian::write_sarif_report(tmp, f.report, f.sink));
+
+    std::ifstream in(tmp);
+    ASSERT_TRUE(in.is_open());
+    auto js = nlohmann::json::parse(in);
+    EXPECT_EQ(js["version"].get<std::string>(), "2.1.0");
+    EXPECT_EQ(js["runs"][0]["results"].size(), 3u);
+
+    std::remove(tmp.c_str());
 }
