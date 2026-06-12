@@ -13,6 +13,7 @@
 #include "perfguardian/hotspot.hpp"
 #include "perfguardian/json_report.hpp"
 #include "perfguardian/html_report.hpp"
+#include "perfguardian/config.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -194,10 +195,22 @@ static int cmd_analyze(const std::string& path,
               << "  |  DB: " << db.function_count() << " functions, "
               << db.type_count() << " types\n";
 
+    // Phase 8: load .perfguardian.yaml config (walk up from analysis path)
+    auto cfg_path = perfguardian::find_config(path);
+    perfguardian::PerfGuardianConfig cfg;
+    if (!cfg_path.empty()) {
+        std::cout << "Config: " << cfg_path << "\n";
+        cfg = perfguardian::load_config(cfg_path);
+    }
+    auto rule_cfg = cfg.to_rule_config();
+
     // Phases 3-5: run rule engine + hotspot ranker
-    auto rules = perfguardian::make_default_rules();
+    auto rules = cfg.filter_rules(perfguardian::make_default_rules());
     perfguardian::DiagnosticSink sink;
-    perfguardian::run_rules(db, sink, rules);
+    perfguardian::run_rules(db, sink, rules, rule_cfg);
+
+    // Phase 8: apply suppressions after running rules
+    cfg.apply_suppressions(sink);
 
     auto report = perfguardian::rank_hotspots(sink);
     perfguardian::print_report(report, db);

@@ -1,8 +1,9 @@
 #pragma once
-#include <string>
-#include <map>
-#include <vector>
+#include <algorithm>
 #include <functional>
+#include <map>
+#include <string>
+#include <vector>
 #include "perfguardian/severity.hpp"
 
 namespace perfguardian {
@@ -56,6 +57,13 @@ public:
             }
         }
         return result;
+    }
+
+    // Remove all diagnostics that satisfy pred (used for suppression).
+    void remove_if(std::function<bool(const Diagnostic&)> pred) {
+        diagnostics_.erase(
+            std::remove_if(diagnostics_.begin(), diagnostics_.end(), pred),
+            diagnostics_.end());
     }
 
     std::size_t count() const { return diagnostics_.size(); }

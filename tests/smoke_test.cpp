@@ -16,6 +16,7 @@
 #include "perfguardian/hotspot.hpp"
 #include "perfguardian/json_report.hpp"
 #include "perfguardian/html_report.hpp"
+#include "perfguardian/config.hpp"
 #include <nlohmann/json.hpp>
 
 // Version header
@@ -978,4 +979,187 @@ TEST(HtmlReport, WriteAndReadFile) {
     EXPECT_NE(content.find("All Issues (3)"),  std::string::npos);
 
     std::remove(tmp.c_str());
+}
+
+// ── Phase 8 — Config + Suppressions ──────────────────────────────────────────
+
+TEST(Config, DefaultConfigIsAllEnabled) {
+    perfguardian::PerfGuardianConfig cfg;
+    EXPECT_TRUE(cfg.rule_enabled("PG001"));
+    EXPECT_TRUE(cfg.rule_enabled("PG006"));
+    EXPECT_TRUE(cfg.rule_enabled("UNKNOWN_RULE"));
+}
+
+TEST(Config, ParseEmptyYamlGivesDefaults) {
+    auto cfg = perfguardian::parse_config("");
+    EXPECT_EQ(cfg.schema_version, 1);
+    EXPECT_TRUE(cfg.rule_overrides.empty());
+    EXPECT_TRUE(cfg.suppressions.empty());
+}
+
+TEST(Config, ParseVersion) {
+    auto cfg = perfguardian::parse_config("version: 2\n");
+    EXPECT_EQ(cfg.schema_version, 2);
+}
+
+TEST(Config, ParseRuleDisabled) {
+    const std::string yaml = R"(
+version: 1
+rules:
+  PG001:
+    enabled: false
+  PG002:
+    enabled: true
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+    EXPECT_FALSE(cfg.rule_enabled("PG001"));
+    EXPECT_TRUE( cfg.rule_enabled("PG002"));
+    EXPECT_TRUE( cfg.rule_enabled("PG003"));
+}
+
+TEST(Config, ParseRuleThresholdOverride) {
+    const std::string yaml = R"(
+version: 1
+rules:
+  PG001:
+    size_threshold_bytes: 64
+  PG005:
+    copy_size_threshold: 128
+  PG006:
+    min_repeat_count: 5
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+    auto rc  = cfg.to_rule_config();
+    EXPECT_EQ(rc.pg001_size_threshold_bytes, 64);
+    EXPECT_EQ(rc.pg005_copy_size_threshold,  128);
+    EXPECT_EQ(rc.pg006_min_repeat_count,     5);
+    EXPECT_EQ(rc.pg002_size_threshold_bytes, 16);
+}
+
+TEST(Config, ParseSuppressionByRule) {
+    const std::string yaml = R"(
+version: 1
+suppressions:
+  - rule: PG001
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+    ASSERT_EQ(cfg.suppressions.size(), 1u);
+    EXPECT_EQ(cfg.suppressions[0].rule, "PG001");
+    EXPECT_TRUE(cfg.suppressions[0].function.empty());
+    EXPECT_TRUE(cfg.suppressions[0].file.empty());
+}
+
+TEST(Config, ParseSuppressionWithFunctionAndFile) {
+    const std::string yaml = R"(
+version: 1
+suppressions:
+  - rule: PG003
+    function: "ns::*::tick"
+    file: "world.cpp"
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+    ASSERT_EQ(cfg.suppressions.size(), 1u);
+    EXPECT_EQ(cfg.suppressions[0].rule,     "PG003");
+    EXPECT_EQ(cfg.suppressions[0].function, "ns::*::tick");
+    EXPECT_EQ(cfg.suppressions[0].file,     "world.cpp");
+}
+
+TEST(Config, ApplySuppressionsRemovesMatchingDiagnostic) {
+    const std::string yaml = R"(
+version: 1
+suppressions:
+  - rule: PG001
+    function: "ns::Player::update"
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "ns::Player::update", "player.cpp", 10,
+                         perfguardian::Severity::High));
+    sink.emit(make_diag("PG003", "ns::World::tick",    "world.cpp",  5,
+                         perfguardian::Severity::Medium));
+
+    cfg.apply_suppressions(sink);
+
+    EXPECT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG003");
+}
+
+TEST(Config, ApplySuppressionsGlobFunction) {
+    const std::string yaml = R"(
+version: 1
+suppressions:
+  - rule: PG001
+    function: "ns::Player::*"
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001", "ns::Player::update", "player.cpp", 1,
+                         perfguardian::Severity::High));
+    sink.emit(make_diag("PG001", "ns::Player::render", "player.cpp", 2,
+                         perfguardian::Severity::High));
+    sink.emit(make_diag("PG001", "ns::Enemy::update",  "enemy.cpp",  3,
+                         perfguardian::Severity::High));
+
+    cfg.apply_suppressions(sink);
+
+    EXPECT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].function_name, "ns::Enemy::update");
+}
+
+TEST(Config, ApplySuppressionsGlobFile) {
+    const std::string yaml = R"(
+version: 1
+suppressions:
+  - rule: PG002
+    file: "legacy_*.cpp"
+)";
+    auto cfg = perfguardian::parse_config(yaml);
+
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG002", "fn", "legacy_player.cpp", 1,
+                         perfguardian::Severity::Medium));
+    sink.emit(make_diag("PG002", "fn", "modern_player.cpp", 2,
+                         perfguardian::Severity::Medium));
+
+    cfg.apply_suppressions(sink);
+
+    EXPECT_EQ(sink.count(), 1u);
+    EXPECT_NE(sink.all()[0].location.file.find("modern_"), std::string::npos);
+}
+
+TEST(Config, FilterRulesRemovesDisabledRule) {
+    const std::string yaml = R"(
+version: 1
+rules:
+  PG001:
+    enabled: false
+)";
+    auto cfg   = perfguardian::parse_config(yaml);
+    auto rules = cfg.filter_rules(perfguardian::make_default_rules());
+
+    for (const auto& r : rules) {
+        EXPECT_NE(std::string(r->rule_id()), "PG001")
+            << "PG001 should have been filtered out";
+    }
+    EXPECT_GE(rules.size(), 5u);
+}
+
+TEST(Config, LoadConfigMissingFileReturnsDefault) {
+    auto cfg = perfguardian::load_config("/nonexistent/path/.perfguardian.yaml");
+    EXPECT_TRUE(cfg.rule_overrides.empty());
+    EXPECT_TRUE(cfg.suppressions.empty());
+}
+
+TEST(Config, FindConfigNotFoundReturnsEmpty) {
+    auto result = perfguardian::find_config("/tmp");
+    SUCCEED();
+}
+
+TEST(Config, InvalidYamlThrows) {
+    EXPECT_THROW(
+        perfguardian::parse_config(": bad: yaml: {"),
+        std::runtime_error
+    );
 }
