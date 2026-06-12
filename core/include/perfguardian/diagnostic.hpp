@@ -29,6 +29,7 @@ struct Diagnostic {
     std::string rule_name;        // e.g. "large-object-by-value"
     Severity    severity = Severity::Medium;
     Location    location;
+    std::string function_name;    // qualified name of the enclosing function
     std::string message;          // human-readable explanation
     std::string suggested_fix;    // e.g. "const Player&"
     std::string code_snippet;     // source context (optional)

@@ -28,8 +28,9 @@ void RulePG001::run(const SymbolDB& db, DiagnosticSink& sink,
             Diagnostic d;
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
-            d.severity  = Severity::High;
-            d.location  = {fn.file, fn.line, fn.column};
+            d.severity       = Severity::High;
+            d.location       = {fn.file, fn.line, fn.column};
+            d.function_name  = fn.qualified_name;
             d.message   = "Parameter '" + param_name + "' of type '" +
                           param.type_spelling + "' is passed by value (" +
                           std::to_string(sz) + " bytes); use 'const " +

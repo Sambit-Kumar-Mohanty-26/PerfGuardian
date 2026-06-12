@@ -84,14 +84,15 @@ endif()
 # Core compiled library
 set(CORE_SOURCES
     src/project_loader/project_loader.cpp
-    src/symbol_db/symbol_db.cpp   # Phase 2
-    src/rules/rules.cpp           # Phase 3+4
-    src/rules/pg001.cpp           # Phase 3
-    src/rules/pg002.cpp           # Phase 4
-    src/rules/pg003.cpp           # Phase 4
-    src/rules/pg004.cpp           # Phase 4
-    src/rules/pg005.cpp           # Phase 4
-    src/rules/pg006.cpp           # Phase 4
+    src/symbol_db/symbol_db.cpp        # Phase 2
+    src/rules/rules.cpp                # Phase 3+4
+    src/rules/pg001.cpp                # Phase 3
+    src/rules/pg002.cpp                # Phase 4
+    src/rules/pg003.cpp                # Phase 4
+    src/rules/pg004.cpp                # Phase 4
+    src/rules/pg005.cpp                # Phase 4
+    src/rules/pg006.cpp                # Phase 4
+    src/analysis/hotspot.cpp           # Phase 5
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)

@@ -12,8 +12,9 @@
 #include "perfguardian/pg004.hpp"
 #include "perfguardian/pg005.hpp"
 #include "perfguardian/pg006.hpp"
+#include "perfguardian/hotspot.hpp"
 
-// ── Version header ─────────────────────────────────────────────────────────────
+// Version header
 
 TEST(Version, StringNotEmpty) {
     EXPECT_FALSE(perfguardian::version_string().empty());
@@ -627,4 +628,131 @@ TEST(PG006, AllRulesRegistered) {
         EXPECT_NE(std::find(ids.begin(), ids.end(), expected), ids.end())
             << expected << " not registered";
     }
+}
+
+// ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────
+
+namespace {
+
+// Build a Diagnostic manually for ranker tests
+perfguardian::Diagnostic make_diag(const std::string& rule_id,
+                                    const std::string& fn_name,
+                                    const std::string& file,
+                                    int line,
+                                    perfguardian::Severity sev) {
+    perfguardian::Diagnostic d;
+    d.rule_id       = rule_id;
+    d.rule_name     = rule_id + "-name";
+    d.severity      = sev;
+    d.function_name = fn_name;
+    d.location      = {file, line, 0};
+    d.message       = "test";
+    return d;
+}
+
+}  // namespace
+
+TEST(HotspotRanker, EmptySinkProducesEmptyReport) {
+    perfguardian::DiagnosticSink sink;
+    auto report = perfguardian::rank_hotspots(sink);
+    EXPECT_EQ(report.total_issues,        0);
+    EXPECT_EQ(report.total_severity_score, 0);
+    EXPECT_TRUE(report.top_functions.empty());
+    EXPECT_TRUE(report.top_files.empty());
+    EXPECT_TRUE(report.rule_summary.empty());
+}
+
+TEST(HotspotRanker, TotalCountsAreCorrect) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001","fn_a","a.cpp",1, perfguardian::Severity::High));
+    sink.emit(make_diag("PG002","fn_b","b.cpp",2, perfguardian::Severity::Medium));
+    sink.emit(make_diag("PG001","fn_a","a.cpp",3, perfguardian::Severity::High));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    EXPECT_EQ(report.total_issues, 3);
+    // High=4, Medium=3, High=4 → 11
+    EXPECT_EQ(report.total_severity_score, 4 + 3 + 4);
+}
+
+TEST(HotspotRanker, FunctionsRankedByScore) {
+    perfguardian::DiagnosticSink sink;
+    // fn_low: 1 Low issue (score=2)
+    sink.emit(make_diag("PG005","fn_low","x.cpp",1, perfguardian::Severity::Low));
+    // fn_high: 1 High issue (score=4)
+    sink.emit(make_diag("PG001","fn_high","x.cpp",5, perfguardian::Severity::High));
+    // fn_med: 1 Medium issue (score=3)
+    sink.emit(make_diag("PG002","fn_med","x.cpp",3, perfguardian::Severity::Medium));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    ASSERT_GE(report.top_functions.size(), 3u);
+    EXPECT_EQ(report.top_functions[0].function_name, "fn_high");
+    EXPECT_EQ(report.top_functions[1].function_name, "fn_med");
+    EXPECT_EQ(report.top_functions[2].function_name, "fn_low");
+}
+
+TEST(HotspotRanker, FunctionAggregatesMultipleIssues) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001","worker","w.cpp",10, perfguardian::Severity::High));
+    sink.emit(make_diag("PG003","worker","w.cpp",20, perfguardian::Severity::Medium));
+    sink.emit(make_diag("PG004","worker","w.cpp",30, perfguardian::Severity::High));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    ASSERT_EQ(report.top_functions.size(), 1u);
+    EXPECT_EQ(report.top_functions[0].issue_count, 3);
+    EXPECT_EQ(report.top_functions[0].score, 4 + 3 + 4);  // High+Med+High
+    EXPECT_EQ(report.top_functions[0].rule_ids.size(), 3u);
+}
+
+TEST(HotspotRanker, FilesAggregatedCorrectly) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001","fn1","player.cpp",1, perfguardian::Severity::High));
+    sink.emit(make_diag("PG002","fn2","player.cpp",5, perfguardian::Severity::Medium));
+    sink.emit(make_diag("PG003","fn3","enemy.cpp", 1, perfguardian::Severity::Low));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    ASSERT_EQ(report.top_files.size(), 2u);
+    // player.cpp has higher score
+    EXPECT_NE(report.top_files[0].file.find("player.cpp"), std::string::npos);
+    EXPECT_EQ(report.top_files[0].issue_count, 2);
+}
+
+TEST(HotspotRanker, RuleSummarySortedByCount) {
+    perfguardian::DiagnosticSink sink;
+    sink.emit(make_diag("PG001","f","f.cpp",1, perfguardian::Severity::High));
+    sink.emit(make_diag("PG001","g","f.cpp",2, perfguardian::Severity::High));
+    sink.emit(make_diag("PG001","h","f.cpp",3, perfguardian::Severity::High));
+    sink.emit(make_diag("PG004","i","f.cpp",4, perfguardian::Severity::High));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    ASSERT_GE(report.rule_summary.size(), 2u);
+    EXPECT_EQ(report.rule_summary[0].rule_id, "PG001");
+    EXPECT_EQ(report.rule_summary[0].count,   3);
+    EXPECT_EQ(report.rule_summary[1].count,   1);
+}
+
+TEST(HotspotRanker, TopNLimitsResults) {
+    perfguardian::DiagnosticSink sink;
+    for (int i = 0; i < 8; ++i) {
+        sink.emit(make_diag("PG001",
+                             "fn_" + std::to_string(i),
+                             "f.cpp", i + 1,
+                             perfguardian::Severity::High));
+    }
+
+    auto report = perfguardian::rank_hotspots(sink, /*top_n=*/3);
+    EXPECT_LE(report.top_functions.size(), 3u);
+    EXPECT_LE(report.top_files.size(),     3u);
+    EXPECT_EQ(report.total_issues, 8);  // total is unaffected by top_n
+}
+
+TEST(HotspotRanker, RuleIdsDeduplicatedPerFunction) {
+    perfguardian::DiagnosticSink sink;
+    // Same rule fires twice on same function
+    sink.emit(make_diag("PG001","fn","f.cpp",1, perfguardian::Severity::High));
+    sink.emit(make_diag("PG001","fn","f.cpp",2, perfguardian::Severity::High));
+
+    auto report = perfguardian::rank_hotspots(sink);
+    ASSERT_EQ(report.top_functions.size(), 1u);
+    EXPECT_EQ(report.top_functions[0].issue_count,   2);
+    EXPECT_EQ(report.top_functions[0].rule_ids.size(), 1u);  // deduplicated
 }

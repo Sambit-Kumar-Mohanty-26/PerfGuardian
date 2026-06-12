@@ -30,9 +30,10 @@ void RulePG006::run(const SymbolDB& db, DiagnosticSink& sink,
             Diagnostic d;
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
-            d.severity  = Severity::Medium;
-            int fl      = first_line.count(callee) ? first_line[callee] : fn.line;
-            d.location  = {fn.file, fl > 0 ? fl : fn.line, fn.column};
+            d.severity      = Severity::Medium;
+            int fl          = first_line.count(callee) ? first_line[callee] : fn.line;
+            d.location      = {fn.file, fl > 0 ? fl : fn.line, fn.column};
+            d.function_name = fn.qualified_name;
             d.message   = "'" + callee + "' called " + std::to_string(n) +
                           " times in '" + fn.qualified_name +
                           "' — cache the result to avoid redundant lookups";

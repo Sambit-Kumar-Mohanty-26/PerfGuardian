@@ -18,8 +18,9 @@ void RulePG004::run(const SymbolDB& db, DiagnosticSink& sink,
             Diagnostic d;
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
-            d.severity  = Severity::High;
-            d.location  = {fn.file, cs.line > 0 ? cs.line : fn.line, fn.column};
+            d.severity      = Severity::High;
+            d.location      = {fn.file, cs.line > 0 ? cs.line : fn.line, fn.column};
+            d.function_name = fn.qualified_name;
             d.message   = "'" + cs.callee + "' called inside loop in '" +
                           fn.qualified_name + "' — repeated container lookups"
                           " compound to O(N²) or O(N log N)";

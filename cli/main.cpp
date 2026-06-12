@@ -10,6 +10,7 @@
 #include "perfguardian/pg001.hpp"
 #include "perfguardian/diagnostic.hpp"
 #include "perfguardian/severity.hpp"
+#include "perfguardian/hotspot.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -191,15 +192,17 @@ static int cmd_analyze(const std::string& path,
               << "  |  DB: " << db.function_count() << " functions, "
               << db.type_count() << " types\n";
 
-    // Phase 3: run rule engine
+    // Phases 3-5: run rule engine + hotspot ranker
     auto rules = perfguardian::make_default_rules();
     perfguardian::DiagnosticSink sink;
     perfguardian::run_rules(db, sink, rules);
 
-    if (sink.empty()) {
-        std::cout << "\nNo issues found.\n";
-    } else {
-        std::cout << "\n" << sink.count() << " issue(s) found:\n";
+    auto report = perfguardian::rank_hotspots(sink);
+    perfguardian::print_report(report, db);
+
+    // Detailed issue list
+    if (!sink.empty()) {
+        std::cout << "\nAll issues:\n";
         std::cout << "─────────────────────────────────────────────────────────\n";
         for (const auto& d : sink.all()) {
             std::cout << "[" << d.rule_id << "] "

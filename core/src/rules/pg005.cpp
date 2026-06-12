@@ -17,8 +17,9 @@ void RulePG005::run(const SymbolDB& db, DiagnosticSink& sink,
             Diagnostic d;
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
-            d.severity  = Severity::Low;
-            d.location  = {fn.file, lv.line > 0 ? lv.line : fn.line, 0};
+            d.severity      = Severity::Low;
+            d.location      = {fn.file, lv.line > 0 ? lv.line : fn.line, 0};
+            d.function_name = fn.qualified_name;
             d.message   = "Local variable '" + vname + "' of type '" +
                           lv.type_spelling + "' is a by-value copy (" +
                           std::to_string(sz) + " bytes); consider 'const " +

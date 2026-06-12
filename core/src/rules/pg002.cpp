@@ -22,8 +22,9 @@ void RulePG002::run(const SymbolDB& db, DiagnosticSink& sink,
             Diagnostic d;
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
-            d.severity  = Severity::Medium;
-            d.location  = {fn.file, fn.line, fn.column};
+            d.severity      = Severity::Medium;
+            d.location      = {fn.file, fn.line, fn.column};
+            d.function_name = fn.qualified_name;
             d.message   = "Parameter '" + pname + "' of type '" +
                           param.type_spelling + "' is a non-const reference (" +
                           std::to_string(sz) + " bytes); use 'const " +
