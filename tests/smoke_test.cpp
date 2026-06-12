@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <fstream>
 #include <string>
 #include "perfguardian/version.hpp"
 #include "perfguardian/parse_result.hpp"
@@ -13,6 +14,8 @@
 #include "perfguardian/pg005.hpp"
 #include "perfguardian/pg006.hpp"
 #include "perfguardian/hotspot.hpp"
+#include "perfguardian/json_report.hpp"
+#include <nlohmann/json.hpp>
 
 // Version header
 
@@ -755,4 +758,132 @@ TEST(HotspotRanker, RuleIdsDeduplicatedPerFunction) {
     ASSERT_EQ(report.top_functions.size(), 1u);
     EXPECT_EQ(report.top_functions[0].issue_count,   2);
     EXPECT_EQ(report.top_functions[0].rule_ids.size(), 1u);  // deduplicated
+}
+
+// ── Phase 6 — JSON report ─────────────────────────────────────────────────────
+
+namespace {
+
+// Build a sink + report for JSON tests
+struct JsonTestFixture {
+    perfguardian::DiagnosticSink sink;
+    perfguardian::AnalysisReport report;
+
+    JsonTestFixture() {
+        sink.emit(make_diag("PG001","ns::Player::update","player.cpp",45,
+                             perfguardian::Severity::High));
+        sink.emit(make_diag("PG003","ns::World::tick",  "world.cpp", 10,
+                             perfguardian::Severity::Medium));
+        sink.emit(make_diag("PG001","ns::Player::update","player.cpp",60,
+                             perfguardian::Severity::High));
+        report = perfguardian::rank_hotspots(sink);
+    }
+};
+
+}  // namespace
+
+TEST(JsonReport, TopLevelKeysPresent) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    EXPECT_TRUE(js.contains("version"));
+    EXPECT_TRUE(js.contains("timestamp"));
+    EXPECT_TRUE(js.contains("summary"));
+    EXPECT_TRUE(js.contains("hotspots"));
+    EXPECT_TRUE(js.contains("diagnostics"));
+}
+
+TEST(JsonReport, VersionMatchesBinary) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    std::string ver = js["version"].get<std::string>();
+    EXPECT_NE(ver.find("0.1.0"), std::string::npos);
+}
+
+TEST(JsonReport, DiagnosticsArrayHasCorrectCount) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    EXPECT_EQ(js["diagnostics"].size(), 3u);
+}
+
+TEST(JsonReport, SeveritySerializedAsString) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    // All PG001 entries should have "high"
+    for (const auto& d : js["diagnostics"]) {
+        if (d["rule_id"] == "PG001") {
+            EXPECT_EQ(d["severity"].get<std::string>(), "high");
+        }
+    }
+}
+
+TEST(JsonReport, LocationFieldsPresent) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    const auto& first = js["diagnostics"][0];
+    EXPECT_TRUE(first.contains("location"));
+    EXPECT_TRUE(first["location"].contains("file"));
+    EXPECT_TRUE(first["location"].contains("line"));
+    EXPECT_TRUE(first["location"].contains("column"));
+}
+
+TEST(JsonReport, MetricsFieldPresent) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    const auto& first = js["diagnostics"][0];
+    EXPECT_TRUE(first.contains("metrics"));
+    EXPECT_TRUE(first["metrics"].contains("type_size_bytes"));
+    EXPECT_TRUE(first["metrics"].contains("loop_depth"));
+}
+
+TEST(JsonReport, SummaryTotalIssuesCorrect) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    EXPECT_EQ(js["summary"]["total_issues"].get<int>(), 3);
+}
+
+TEST(JsonReport, RuleSummaryPopulated) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    const auto& by_rule = js["summary"]["by_rule"];
+    EXPECT_GE(by_rule.size(), 2u);  // PG001 + PG003
+    bool found_pg001 = false;
+    for (const auto& r : by_rule) {
+        if (r["rule_id"] == "PG001") {
+            found_pg001 = true;
+            EXPECT_EQ(r["count"].get<int>(), 2);
+        }
+    }
+    EXPECT_TRUE(found_pg001);
+}
+
+TEST(JsonReport, HotspotFunctionsPopulated) {
+    JsonTestFixture f;
+    auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
+    const auto& fns = js["hotspots"]["functions"];
+    EXPECT_GE(fns.size(), 1u);
+    EXPECT_TRUE(fns[0].contains("function_name"));
+    EXPECT_TRUE(fns[0].contains("score"));
+    EXPECT_TRUE(fns[0].contains("rule_ids"));
+}
+
+TEST(JsonReport, EmptySinkProducesValidJson) {
+    perfguardian::DiagnosticSink empty_sink;
+    auto empty_report = perfguardian::rank_hotspots(empty_sink);
+    auto js = nlohmann::json::parse(
+        perfguardian::to_json_string(empty_report, empty_sink));
+    EXPECT_EQ(js["summary"]["total_issues"].get<int>(), 0);
+    EXPECT_TRUE(js["diagnostics"].empty());
+}
+
+TEST(JsonReport, WriteAndReadFile) {
+    JsonTestFixture f;
+    const std::string tmp = "perfguardian_test_report.json";
+    ASSERT_NO_THROW(perfguardian::write_json_report(tmp, f.report, f.sink));
+
+    std::ifstream in(tmp);
+    ASSERT_TRUE(in.is_open());
+    auto js = nlohmann::json::parse(in);
+    EXPECT_EQ(js["summary"]["total_issues"].get<int>(), 3);
+
+    std::remove(tmp.c_str());
 }
