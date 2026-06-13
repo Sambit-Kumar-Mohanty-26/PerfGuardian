@@ -8,8 +8,10 @@ void RulePG002::run(const SymbolDB& db, DiagnosticSink& sink,
 
     for (const auto& fn : db.functions()) {
         for (const auto& param : fn.params) {
-            // Only flag non-const lvalue references of large types
-            if (!param.is_reference || param.is_const || param.is_rvalue_ref) {
+            // Only flag non-const lvalue references of large types that the
+            // function never modifies — a mutated reference can't become const.
+            if (!param.is_reference || param.is_const || param.is_rvalue_ref ||
+                param.is_mutated) {
                 continue;
             }
             const long long sz = param.type_size_bytes;

@@ -362,6 +362,27 @@ TEST(PG002, FlagsNonConstRefLargeParam) {
     EXPECT_NE(sink.all()[0].suggested_fix.find("const"), std::string::npos);
 }
 
+TEST(PG002, SkipsMutatedRef) {
+    // A large non-const reference that the body writes to (e.g. a stream or
+    // out-parameter) must NOT be flagged — it cannot become const. Phase 11.
+    perfguardian::SymbolDB db;
+    perfguardian::ParamInfo p;
+    p.name            = "out";
+    p.type_spelling   = "std::ostream";
+    p.type_size_bytes = 112;
+    p.is_reference    = true;
+    p.is_const        = false;
+    p.is_pointer      = false;
+    p.is_rvalue_ref   = false;
+    p.is_mutated      = true;
+    db.add(make_result_with_function("writeReport", {p}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG002 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
 TEST(PG002, SkipsConstRef) {
     perfguardian::SymbolDB db;
     db.add(make_result_with_function(

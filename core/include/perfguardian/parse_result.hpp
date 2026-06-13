@@ -14,6 +14,8 @@ struct ParamInfo {
     bool        is_pointer;      // true for T*
     bool        is_const;        // true for const T, const T&, etc.
     bool        is_rvalue_ref;   // true for T&&
+    bool        is_mutated = false; // written to in the body (assignment, non-const
+                                    // method call, passed to non-const ref, etc.)
 };
 
 // A call expression captured inside a function body (Phase 4)
