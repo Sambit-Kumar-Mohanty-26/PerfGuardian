@@ -364,7 +364,12 @@ ParseResult parse_file(const std::string& filepath,
         clang_disposeDiagnostic(diag);
     }
 
-    if (result.ok) {
+    // Visit the AST even when there were errors. libclang still produces a
+    // usable AST (IDEs depend on this), and the visitor only records cursors
+    // from the main source file — so we recover the user's own functions even
+    // when a third-party header fails to compile under Clang. result.ok still
+    // reflects whether errors occurred, for reporting.
+    {
         VisitorData data{&result, tu, &filepath, opts.parse_bodies};
         CXCursor root = clang_getTranslationUnitCursor(tu);
         clang_visitChildren(root, visit_ast, &data);

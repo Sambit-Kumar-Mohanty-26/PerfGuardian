@@ -66,15 +66,15 @@ static int cmd_dump_ast(const std::string& filepath) {
             // Normalize paths for comparison
             fs::path cmd_path = fs::path(cmd.file).lexically_normal();
             fs::path req_path = fs::path(filepath).lexically_normal();
-            if (cmd_path == req_path && cmd.arguments.size() > 1) {
-                // Skip argv[0] (compiler name)
-                compile_args.assign(cmd.arguments.begin() + 1, cmd.arguments.end());
+            if (cmd_path == req_path) {
+                compile_args = perfguardian::sanitize_compile_args(cmd);
                 break;
             }
         }
     } catch (...) {
-        // No compile_commands.json — use default C++20 flags
-        compile_args = {"-std=c++20"};
+        // No compile_commands.json — infer include dirs from the tree.
+        compile_args = perfguardian::infer_include_dirs(file_dir.string());
+        compile_args.push_back("-std=c++20");
     }
 
     auto result = perfguardian::parse_file(filepath, compile_args);
@@ -168,34 +168,71 @@ static int cmd_analyze(const std::string& path,
         }
     }
 
+    // Include paths inferred from the tree, used when no per-file command exists.
+    std::vector<std::string> fallback_args;
+    if (!has_compile_commands) {
+        fallback_args = perfguardian::infer_include_dirs(path);
+        fallback_args.push_back("-std=c++20");
+    }
+
     // Phase 1: parse all translation units
     perfguardian::SymbolDB db;
-    int parsed = 0, failed = 0;
+    int parsed = 0, partial = 0, failed = 0;
+    std::string first_error;
     for (const auto& src : sources) {
-        std::vector<std::string> args = {"-std=c++20"};
+        std::vector<std::string> args;
         if (has_compile_commands) {
             for (const auto& cmd : compile_commands) {
-                if (cmd.file == src && cmd.arguments.size() > 1) {
-                    args.assign(cmd.arguments.begin() + 1, cmd.arguments.end());
+                if (cmd.file == src) {
+                    args = perfguardian::sanitize_compile_args(cmd);
                     break;
                 }
             }
+            if (args.empty()) args = fallback_args.empty()
+                ? std::vector<std::string>{"-std=c++20"} : fallback_args;
+        } else {
+            args = fallback_args;
         }
         auto result = perfguardian::parse_file(src, args);
+        const std::string name = fs::path(src).filename().string();
         if (result.ok) {
             ++parsed;
             db.add(result);
-            std::cout << "  [ok]   " << fs::path(src).filename().string()
+            std::cout << "  [ok]   " << name
                       << "  (" << result.functions.size() << " fns, "
                       << result.types.size() << " types)\n";
+        } else if (!result.functions.empty() || !result.types.empty()) {
+            // Header errors, but the file's own declarations were recovered.
+            ++partial;
+            db.add(result);
+            std::cout << "  [warn] " << name
+                      << "  (" << result.functions.size() << " fns recovered; "
+                      << "header errors)\n";
         } else {
             ++failed;
-            std::cout << "  [err]  " << fs::path(src).filename().string() << "\n";
+            if (first_error.empty() && !result.errors.empty())
+                first_error = result.errors.front();
+            std::cout << "  [err]  " << name << "\n";
         }
     }
-    std::cout << "\nParsed: " << parsed << " ok, " << failed << " failed"
+    std::cout << "\nParsed: " << parsed << " ok, " << partial << " partial, "
+              << failed << " failed"
               << "  |  DB: " << db.function_count() << " functions, "
               << db.type_count() << " types\n";
+
+    // Loud warning only if NOTHING usable came out — otherwise "No issues found"
+    // misleads the user into thinking their code was analyzed and is clean.
+    if (failed > 0 && db.function_count() == 0) {
+        std::cerr << "\n[warning] " << failed << " of " << (parsed + partial + failed)
+                  << " files failed to parse — no code was analyzed.\n";
+        if (!first_error.empty())
+            std::cerr << "          First error: " << first_error << "\n";
+        if (!has_compile_commands)
+            std::cerr << "          For projects with non-trivial includes, "
+                         "build a compile_commands.json\n"
+                         "          (cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON) "
+                         "and point PerfGuardian at it.\n";
+    }
 
     // Phase 8: load .perfguardian.yaml config (walk up from analysis path)
     auto cfg_path = perfguardian::find_config(path);
