@@ -45,7 +45,6 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
     GIT_TAG        0.8.0
     GIT_SHALLOW    TRUE
-    PATCH_COMMAND  ${CMAKE_COMMAND} -P "${CMAKE_SOURCE_DIR}/cmake/patch_yaml_cpp.cmake"
 )
 set(YAML_CPP_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_BUILD_TOOLS  OFF CACHE BOOL "" FORCE)
