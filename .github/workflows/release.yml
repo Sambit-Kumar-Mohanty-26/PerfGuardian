@@ -132,11 +132,10 @@ jobs:
           echo "Built ${ARTIFACT}"
           cat "${ARTIFACT}.sha256"
 
-      - name: Package zip (Windows)
+      - name: Stage Windows files
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          ARTIFACT="${{ matrix.artifact }}"
           mkdir -p dist
           cp build/bin/perfguardian.exe dist/
           # Bundle required MinGW runtime DLLs
@@ -145,12 +144,19 @@ jobs:
           done
           # libclang.dll is already copied by CMake into build/bin
           cp build/bin/libclang.dll dist/ 2>/dev/null || true
-          cd dist
-          7z a "../${ARTIFACT}" * > /dev/null
-          cd ..
-          sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
-          echo "Built ${ARTIFACT}"
-          cat "${ARTIFACT}.sha256"
+          cp LICENSE dist/ 2>/dev/null || true
+          ls -la dist/
+
+      - name: Package zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifact = "${{ matrix.artifact }}"
+          Compress-Archive -Path dist/* -DestinationPath $artifact -Force
+          $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash.ToLower()
+          "$hash  $artifact" | Out-File -FilePath "$artifact.sha256" -Encoding ascii -NoNewline
+          Write-Host "Built $artifact"
+          Get-Content "$artifact.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -220,5 +226,6 @@ jobs:
           generate_release_notes: true
           files: |
             release-assets/*.tar.gz
+            release-assets/*.zip
             release-assets/*.sha256
           fail_on_unmatched_files: true
