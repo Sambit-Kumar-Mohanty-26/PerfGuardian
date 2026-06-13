@@ -28,8 +28,9 @@ void RulePG002::run(const SymbolDB& db, DiagnosticSink& sink,
             d.message   = "Parameter '" + pname + "' of type '" +
                           param.type_spelling + "' is a non-const reference (" +
                           std::to_string(sz) + " bytes); use 'const " +
-                          param.type_spelling + "' if the parameter is not modified";
-            d.suggested_fix       = "const " + param.type_spelling + "& " + pname;
+                          param.bare_type_spelling +
+                          "&' if the parameter is not modified";
+            d.suggested_fix       = "const " + param.bare_type_spelling + "& " + pname;
             d.metrics.type_size_bytes = sz;
 
             sink.emit(std::move(d));

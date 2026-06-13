@@ -90,13 +90,14 @@ perfguardian::ParamInfo make_param(const std::string& name,
                                    bool is_ptr   = false,
                                    bool is_rref  = false) {
     perfguardian::ParamInfo p;
-    p.name            = name;
-    p.type_spelling   = type;
-    p.type_size_bytes = size;
-    p.is_reference    = is_ref;
-    p.is_pointer      = is_ptr;
-    p.is_rvalue_ref   = is_rref;
-    p.is_const        = is_ref;
+    p.name               = name;
+    p.type_spelling      = type;
+    p.bare_type_spelling = type;
+    p.type_size_bytes    = size;
+    p.is_reference       = is_ref;
+    p.is_pointer         = is_ptr;
+    p.is_rvalue_ref      = is_rref;
+    p.is_const           = is_ref;
     return p;
 }
 
@@ -293,14 +294,17 @@ perfguardian::LocalVar make_local(const std::string& name,
                                    const std::string& type,
                                    long long size,
                                    bool is_ref = false,
-                                   bool is_ptr = false) {
+                                   bool is_ptr = false,
+                                   bool copy_init = true) {
     perfguardian::LocalVar lv;
-    lv.name            = name;
-    lv.type_spelling   = type;
-    lv.type_size_bytes = size;
-    lv.is_reference    = is_ref;
-    lv.is_pointer      = is_ptr;
-    lv.line            = 5;
+    lv.name               = name;
+    lv.type_spelling      = type;
+    lv.bare_type_spelling = type;
+    lv.type_size_bytes    = size;
+    lv.is_reference       = is_ref;
+    lv.is_pointer         = is_ptr;
+    lv.is_copy_initialized = copy_init;
+    lv.line               = 5;
     return lv;
 }
 
@@ -526,6 +530,22 @@ TEST(PG005, SkipsReference) {
     EXPECT_TRUE(sink.empty());
 }
 
+TEST(PG005, SkipsNonCopyLocal) {
+    // A large local that is default/value-constructed (not copied from an
+    // existing object) must NOT be flagged — switching to a reference is
+    // impossible. Regression test for the clean-demo false positive.
+    perfguardian::SymbolDB db;
+    db.add(make_result_with_locals("process", {
+        make_local("state", "GameState", 1200, /*ref=*/false,
+                   /*ptr=*/false, /*copy_init=*/false),
+    }));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG005 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
 TEST(PG005, SkipsSmallLocal) {
     perfguardian::SymbolDB db;
     db.add(make_result_with_locals("fn", {
@@ -604,6 +624,40 @@ TEST(PG006, FlagsRepeatedOperatorBracket) {
 
     ASSERT_EQ(sink.count(), 1u);
     EXPECT_EQ(sink.all()[0].metrics.lookup_count, 3);
+}
+
+TEST(PG006, GroupsDifferentOpsOnSameTarget) {
+    // `m.count(key)` then `m[key]` are different callees but the same target,
+    // so they count as one key looked up twice. (find-in-loop-demo processMap)
+    perfguardian::SymbolDB db;
+    auto c1 = make_call("count", false, 0, 3);
+    c1.lookup_target = "key|m";
+    auto c2 = make_call("operator[]", false, 0, 4);
+    c2.lookup_target = "key|m";
+    db.add(make_result_with_calls("processMap", {c1, c2}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].metrics.lookup_count, 2);
+}
+
+TEST(PG006, SkipsLookupsOnDifferentKeys) {
+    // Two lookups via the same operation but on different keys are not
+    // redundant and must NOT be flagged.
+    perfguardian::SymbolDB db;
+    auto c1 = make_call("operator[]", false, 0, 3);
+    c1.lookup_target = "m|x";
+    auto c2 = make_call("operator[]", false, 0, 4);
+    c2.lookup_target = "m|y";
+    db.add(make_result_with_calls("fn", {c1, c2}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG006 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
 }
 
 TEST(PG006, RespectsMinRepeatConfig) {

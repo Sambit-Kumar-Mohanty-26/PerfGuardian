@@ -9,6 +9,9 @@ void RulePG005::run(const SymbolDB& db, DiagnosticSink& sink,
     for (const auto& fn : db.functions()) {
         for (const auto& lv : fn.local_vars) {
             if (lv.is_reference || lv.is_pointer) continue;
+            // Only an avoidable copy if it's initialized from an existing object.
+            // Default/value/direct construction is not a copy.
+            if (!lv.is_copy_initialized) continue;
             const long long sz = lv.type_size_bytes;
             if (sz < 0 || sz <= threshold) continue;
 
@@ -23,8 +26,8 @@ void RulePG005::run(const SymbolDB& db, DiagnosticSink& sink,
             d.message   = "Local variable '" + vname + "' of type '" +
                           lv.type_spelling + "' is a by-value copy (" +
                           std::to_string(sz) + " bytes); consider 'const " +
-                          lv.type_spelling + "&' if mutation is not needed";
-            d.suggested_fix       = "const " + lv.type_spelling + "& " + vname;
+                          lv.bare_type_spelling + "&' if mutation is not needed";
+            d.suggested_fix       = "const " + lv.bare_type_spelling + "& " + vname;
             d.metrics.type_size_bytes = sz;
             d.metrics.copy_cost_bytes = sz;
 

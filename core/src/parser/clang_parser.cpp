@@ -2,7 +2,10 @@
 #include <clang-c/Index.h>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <set>
+#include <unordered_set>
 #include <filesystem>
 
 namespace perfguardian {
@@ -18,6 +21,23 @@ static std::string cx_to_string(CXString cxs) {
     return result;
 }
 
+// Spelling of a type with any leading "const " and trailing reference/pointer
+// markers removed, e.g. "const Player &" -> "Player". Used to build correct
+// "const T&" suggestions without doubling qualifiers.
+static std::string bare_type_name(CXType type) {
+    std::string s = cx_to_string(clang_getTypeSpelling(type));
+    // trim trailing whitespace, '&' and '*'
+    while (!s.empty() && (s.back() == '&' || s.back() == '*' || s.back() == ' ')) {
+        s.pop_back();
+    }
+    // strip a single leading "const "
+    constexpr std::string_view kConst = "const ";
+    if (s.rfind(kConst, 0) == 0) {
+        s.erase(0, kConst.size());
+    }
+    return s;
+}
+
 static ParamInfo make_param_info(CXCursor param_cursor) {
     ParamInfo p;
     p.name = cx_to_string(clang_getCursorSpelling(param_cursor));
@@ -29,7 +49,15 @@ static ParamInfo make_param_info(CXCursor param_cursor) {
     p.is_reference   = (kind == CXType_LValueReference);
     p.is_rvalue_ref  = (kind == CXType_RValueReference);
     p.is_pointer     = (kind == CXType_Pointer);
-    p.is_const       = clang_isConstQualifiedType(cxtype) != 0;
+
+    // A reference type is never itself const-qualified — the const lives on the
+    // pointee (e.g. `const T&`). Check the referent for references/pointers.
+    CXType referent = cxtype;
+    if (p.is_reference || p.is_rvalue_ref || p.is_pointer) {
+        referent = clang_getPointeeType(cxtype);
+    }
+    p.is_const            = clang_isConstQualifiedType(referent) != 0;
+    p.bare_type_spelling  = bare_type_name(referent);
 
     // Unwrap reference/pointer to get the pointee type for size computation
     CXType canonical = clang_getCanonicalType(cxtype);
@@ -46,10 +74,62 @@ static ParamInfo make_param_info(CXCursor param_cursor) {
 // Body visitor
 
 struct BodyVisitorData {
-    FunctionDecl* fn;
-    int           loop_depth = 0;
-    bool          in_main_file = true; // already filtered by caller
+    FunctionDecl*     fn;
+    CXTranslationUnit tu = nullptr;
+    int               loop_depth = 0;
+    bool              in_main_file = true; // already filtered by caller
 };
+
+// Builds a signature for a lookup call expression from its source tokens:
+// the set of identifier/literal tokens with the lookup operation names removed,
+// sorted and joined. So `m.count(key)` and `m[key]` both yield "key|m", while
+// `m[x]` and `m[y]` differ. Lets PG006 group lookups by target, not operation.
+static std::string lookup_signature(CXTranslationUnit tu, CXCursor cursor) {
+    static const std::unordered_set<std::string> kOps = {
+        "find", "at", "count", "contains", "operator"
+    };
+    CXSourceRange range = clang_getCursorExtent(cursor);
+    CXToken* tokens = nullptr;
+    unsigned num = 0;
+    clang_tokenize(tu, range, &tokens, &num);
+
+    std::set<std::string> parts;
+    for (unsigned i = 0; i < num; ++i) {
+        CXTokenKind tk = clang_getTokenKind(tokens[i]);
+        if (tk != CXToken_Identifier && tk != CXToken_Literal) continue;
+        std::string s = cx_to_string(clang_getTokenSpelling(tu, tokens[i]));
+        if (kOps.count(s)) continue;
+        parts.insert(std::move(s));
+    }
+    clang_disposeTokens(tu, tokens, num);
+
+    std::string sig;
+    for (const auto& p : parts) {
+        if (!sig.empty()) sig += '|';
+        sig += p;
+    }
+    return sig;
+}
+
+// Detects whether a VarDecl is copy-initialized from an existing named object,
+// e.g. `Player p = other;` or `auto x = vec[i];`. A reference to another
+// variable/parameter in the initializer is the signal. Default/value/direct
+// construction (`Player p{};`, `Player p(1,2);`) has no such reference and is
+// therefore not treated as an avoidable copy.
+struct CopyInitProbe { bool found = false; };
+
+static CXChildVisitResult probe_copy_init(CXCursor cursor, CXCursor /*parent*/,
+                                          CXClientData client_data) {
+    auto* probe = static_cast<CopyInitProbe*>(client_data);
+    if (clang_getCursorKind(cursor) == CXCursor_DeclRefExpr) {
+        CXCursorKind rk = clang_getCursorKind(clang_getCursorReferenced(cursor));
+        if (rk == CXCursor_VarDecl || rk == CXCursor_ParmDecl) {
+            probe->found = true;
+            return CXChildVisit_Break;
+        }
+    }
+    return CXChildVisit_Recurse;
+}
 
 // Forward-declare so visit_body can call itself recursively for loops
 static CXChildVisitResult visit_body(CXCursor cursor, CXCursor parent,
@@ -80,6 +160,7 @@ static CXChildVisitResult visit_body(CXCursor cursor, CXCursor /*parent*/,
             cs.callee      = std::move(callee);
             cs.inside_loop = (data->loop_depth > 0);
             cs.loop_depth  = data->loop_depth;
+            if (data->tu) cs.lookup_target = lookup_signature(data->tu, cursor);
             CXSourceLocation loc = clang_getCursorLocation(cursor);
             CXFile file; unsigned line;
             clang_getFileLocation(loc, &file, &line, nullptr, nullptr);
@@ -101,12 +182,17 @@ static CXChildVisitResult visit_body(CXCursor cursor, CXCursor /*parent*/,
             lv.name          = cx_to_string(clang_getCursorSpelling(cursor));
             CXType cxtype    = clang_getCursorType(cursor);
             lv.type_spelling = cx_to_string(clang_getTypeSpelling(cxtype));
+            lv.bare_type_spelling = bare_type_name(cxtype);
             CXTypeKind tk    = cxtype.kind;
             lv.is_reference  = (tk == CXType_LValueReference);
             lv.is_pointer    = (tk == CXType_Pointer);
             CXType canonical = clang_getCanonicalType(cxtype);
             long long sz     = clang_Type_getSizeOf(canonical);
             lv.type_size_bytes = (sz >= 0) ? sz : -1;
+
+            CopyInitProbe probe;
+            clang_visitChildren(cursor, probe_copy_init, &probe);
+            lv.is_copy_initialized = probe.found;
             CXSourceLocation loc = clang_getCursorLocation(cursor);
             CXFile file; unsigned line;
             clang_getFileLocation(loc, &file, &line, nullptr, nullptr);
@@ -180,7 +266,7 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
 
         // Body analysis: visit children for call sites + local vars
         if (data->parse_bodies && clang_isCursorDefinition(cursor)) {
-            BodyVisitorData bd{&fn, 0};
+            BodyVisitorData bd{&fn, data->tu, 0};
             clang_visitChildren(cursor, visit_body, &bd);
         }
 

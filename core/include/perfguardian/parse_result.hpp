@@ -7,7 +7,8 @@ namespace perfguardian {
 // A single function parameter as seen in the AST
 struct ParamInfo {
     std::string name;
-    std::string type_spelling;   // human-readable type, e.g. "Player"
+    std::string type_spelling;   // human-readable type, e.g. "const Player &"
+    std::string bare_type_spelling; // referent type without const/&, e.g. "Player"
     long long   type_size_bytes; // sizeof(type), -1 if not computable
     bool        is_reference;    // true for T& or const T&
     bool        is_pointer;      // true for T*
@@ -18,6 +19,8 @@ struct ParamInfo {
 // A call expression captured inside a function body (Phase 4)
 struct CallSite {
     std::string callee;           // method/function name, e.g. "push_back", "find"
+    std::string lookup_target;    // container+key signature, ignoring the operation
+                                  // (e.g. "key|m"); empty if not computed
     bool        inside_loop = false;
     int         loop_depth  = 0;
     std::string file;
@@ -28,9 +31,11 @@ struct CallSite {
 struct LocalVar {
     std::string name;
     std::string type_spelling;
+    std::string bare_type_spelling;       // type without const/&, e.g. "Player"
     long long   type_size_bytes = -1;
     bool        is_reference    = false;
     bool        is_pointer      = false;
+    bool        is_copy_initialized = false; // initialized by copying an existing object
     std::string file;
     int         line = 0;
 };
