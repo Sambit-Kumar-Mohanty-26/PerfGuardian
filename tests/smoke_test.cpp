@@ -29,7 +29,7 @@ TEST(Version, StringNotEmpty) {
 
 TEST(Version, StringContainsTag) {
     auto v = perfguardian::version_string();
-    EXPECT_NE(v.find("0.2.0"), std::string::npos);
+    EXPECT_NE(v.find("0.2.1"), std::string::npos);
 }
 
 TEST(Version, StringContainsBinaryName) {
@@ -40,14 +40,14 @@ TEST(Version, StringContainsBinaryName) {
 TEST(Version, MajorMinorPatch) {
     EXPECT_EQ(perfguardian::version_major, 0);
     EXPECT_EQ(perfguardian::version_minor, 2);
-    EXPECT_EQ(perfguardian::version_patch, 0);
+    EXPECT_EQ(perfguardian::version_patch, 1);
 }
 
 TEST(Version, ConstexprStr) {
     // version_str must be a literal-compatible constexpr string
     static_assert(perfguardian::version_major == 0);
     static_assert(perfguardian::version_minor == 2);
-    static_assert(perfguardian::version_patch == 0);
+    static_assert(perfguardian::version_patch == 1);
     SUCCEED();
 }
 
@@ -875,7 +875,7 @@ TEST(JsonReport, VersionMatchesBinary) {
     JsonTestFixture f;
     auto js = nlohmann::json::parse(perfguardian::to_json_string(f.report, f.sink));
     std::string ver = js["version"].get<std::string>();
-    EXPECT_NE(ver.find("0.2.0"), std::string::npos);
+    EXPECT_NE(ver.find("0.2.1"), std::string::npos);
 }
 
 TEST(JsonReport, DiagnosticsArrayHasCorrectCount) {
@@ -978,7 +978,7 @@ TEST(HtmlReport, ContainsDoctype) {
 TEST(HtmlReport, ContainsVersionString) {
     JsonTestFixture f;
     auto html = perfguardian::to_html_string(f.report, f.sink);
-    EXPECT_NE(html.find("0.2.0"), std::string::npos);
+    EXPECT_NE(html.find("0.2.1"), std::string::npos);
 }
 
 TEST(HtmlReport, ContainsTotalIssueCount) {
