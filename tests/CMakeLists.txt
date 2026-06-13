@@ -28,5 +28,5 @@ add_test(NAME smoke_analyze_stub
 
 # --version must contain the version string
 set_tests_properties(smoke_version PROPERTIES
-    PASS_REGULAR_EXPRESSION "PerfGuardian 0\\.1\\.0"
+    PASS_REGULAR_EXPRESSION "PerfGuardian 0\\.2\\.0"
 )
