@@ -21,7 +21,7 @@ jobs:
             target: linux-x86_64
             artifact: perfguardian-linux-x86_64.tar.gz
 
-          - os: macos-12
+          - os: macos-15-intel
             target: macos-x86_64
             artifact: perfguardian-macos-x86_64.tar.gz
 
