@@ -51,6 +51,12 @@ set(YAML_CPP_BUILD_TOOLS  OFF CACHE BOOL "" FORCE)
 set(YAML_CPP_INSTALL      OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(yaml-cpp)
 
+# yaml-cpp 0.8.0's emitterutils.cpp uses uint16_t without including <cstdint>.
+# Newer GCC/Clang (15+) no longer pull it in transitively, so force-include it.
+if(TARGET yaml-cpp AND (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"))
+    target_compile_options(yaml-cpp PRIVATE -include cstdint)
+endif()
+
 # ─── GoogleTest — unit testing ─────────────────────────────────────────────────
 if(PERFGUARDIAN_BUILD_TESTS)
     FetchContent_Declare(
