@@ -1,3 +1,6 @@
+# CMake 4.3 rejects CMAKE_POLICY_VERSION_MINIMUM="3" (major-only).
+# Force it to a valid major.minor before GoogleTest.cmake reads it.
+set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 include(GoogleTest)
 
 # ── Unit tests ────────────────────────────────────────────────────────────────

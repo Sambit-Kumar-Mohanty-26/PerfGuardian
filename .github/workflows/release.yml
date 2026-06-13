@@ -78,10 +78,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          MINGW_PREFIX="$(cygpath -w /mingw64)"
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DPERFGUARDIAN_BUILD_TESTS=OFF \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DLLVM_INCLUDE_HINTS="${MINGW_PREFIX}/include" \
+            -DLLVM_LIBRARY_HINTS="${MINGW_PREFIX}/lib;${MINGW_PREFIX}/bin" \
             -G Ninja
 
       - name: Build (Linux / macOS)

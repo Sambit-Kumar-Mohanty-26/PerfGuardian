@@ -11,14 +11,30 @@ option(PERFGUARDIAN_ENABLE_CLANG "Enable Clang/LibClang AST parsing" ON)
 
 if(PERFGUARDIAN_ENABLE_CLANG)
     if(WIN32)
-        set(_pg_clang_include "C:/Program Files/LLVM/include")
-        set(_pg_clang_implib  "${CMAKE_SOURCE_DIR}/cmake/libclang.dll.a")
-        set(_pg_clang_dll     "C:/Program Files/LLVM/bin/libclang.dll")
-        # Expose DLL path for post-build copy in cli/
-        set(PERFGUARDIAN_LIBCLANG_DLL "${_pg_clang_dll}" CACHE INTERNAL "")
-        if(NOT EXISTS "${_pg_clang_dll}")
-            message(STATUS "PerfGuardian: libclang.dll not found — CLANG integration disabled")
+        find_path(_pg_clang_include clang-c/Index.h
+            HINTS
+                ${LLVM_INCLUDE_HINTS}
+                "C:/msys64/mingw64/include"
+                "C:/Program Files/LLVM/include"
+        )
+        find_library(_pg_clang_implib NAMES clang libclang clang.dll
+            HINTS
+                ${LLVM_LIBRARY_HINTS}
+                "C:/msys64/mingw64/lib"
+                "C:/Program Files/LLVM/lib"
+        )
+        find_file(_pg_clang_dll libclang.dll
+            HINTS
+                ${LLVM_LIBRARY_HINTS}
+                "C:/msys64/mingw64/bin"
+                "C:/Program Files/LLVM/bin"
+        )
+        if(NOT _pg_clang_include OR NOT _pg_clang_implib OR NOT _pg_clang_dll)
+            message(STATUS "PerfGuardian: libclang not found — CLANG integration disabled")
             set(PERFGUARDIAN_ENABLE_CLANG OFF CACHE BOOL "" FORCE)
+        else()
+            message(STATUS "PerfGuardian: found libclang at ${_pg_clang_dll}")
+            set(PERFGUARDIAN_LIBCLANG_DLL "${_pg_clang_dll}" CACHE INTERNAL "")
         endif()
     else()
         # Linux/macOS: locate headers and shared library without requiring
@@ -72,6 +88,7 @@ if(PERFGUARDIAN_ENABLE_CLANG)
             IMPORTED_LOCATION             "${_pg_clang_dll}"
             IMPORTED_IMPLIB               "${_pg_clang_implib}"
             INTERFACE_INCLUDE_DIRECTORIES "${_pg_clang_include}"
+            INTERFACE_LINK_DIRECTORIES    ""
         )
     else()
         set_target_properties(libclang_import PROPERTIES
