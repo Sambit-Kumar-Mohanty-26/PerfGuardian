@@ -1,96 +1,196 @@
 # PerfGuardian
 
-**AI-assisted C++ performance analyzer and automated code reviewer.**
+A static performance analyzer for C++20 codebases. PerfGuardian scans your project
+through the Clang AST, flags performance-sensitive patterns — large objects passed
+by value, missing `const&`, containers grown without `reserve()`, lookups inside
+loops — and reports them with the cost rationale and a concrete fix. It emits plain
+text, JSON, HTML, and SARIF, and integrates with CI to fail a build when regressions
+appear.
 
-PerfGuardian analyzes entire C++ projects for performance bottlenecks, memory inefficiencies,
-algorithmic complexity issues, and STL misuse — then quantifies the impact and suggests exact fixes.
-It integrates with CI/CD pipelines to block inefficient code before merge.
+[![CI](https://github.com/Sambit-Kumar-Mohanty-26/PerfGuardian/actions/workflows/ci.yml/badge.svg)](https://github.com/Sambit-Kumar-Mohanty-26/PerfGuardian/actions/workflows/ci.yml)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
+---
+
+## Install
+
+### macOS / Linux (Homebrew)
+
+```bash
+brew tap Sambit-Kumar-Mohanty-26/tap
+brew install perfguardian
+```
+
+### Windows (Scoop)
+
+```powershell
+scoop bucket add perfguardian https://github.com/Sambit-Kumar-Mohanty-26/homebrew-tap
+scoop install perfguardian
+```
+
+### Direct download
+
+Grab a prebuilt binary from the [latest release](https://github.com/Sambit-Kumar-Mohanty-26/PerfGuardian/releases/latest):
+
+| Platform | Asset |
+|---|---|
+| Linux x86_64 | `perfguardian-linux-x86_64.tar.gz` |
+| macOS arm64 | `perfguardian-macos-arm64.tar.gz` |
+| macOS x86_64 | `perfguardian-macos-x86_64.tar.gz` |
+| Windows x86_64 | `perfguardian-windows-x86_64.zip` |
+
+Each asset ships with a matching `.sha256` file. Verify before use:
+
+```bash
+sha256sum -c perfguardian-linux-x86_64.tar.gz.sha256
+```
 
 ---
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/your-username/PerfGuardian
-cd PerfGuardian
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-./build/bin/perfguardian analyze samples/large-copy-demo/
+# Analyze a project and print findings to the terminal
+perfguardian analyze /path/to/project
+
+# Analyze the current directory and emit every report format
+perfguardian analyze . --json report.json --html report.html --sarif report.sarif
+
+# Fail the command (non-zero exit) if any HIGH-or-worse issue is found
+perfguardian analyze . --fail-on high
 ```
+
+PerfGuardian discovers translation units through `compile_commands.json`. Generate one
+with `cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ...`, or point the tool at a directory
+that contains it. Without a compilation database it falls back to scanning `.cpp`/`.hpp`
+files directly.
 
 ---
 
-## Features
+## Usage
 
-| Feature | Status |
+```
+perfguardian analyze <path> [options]     Analyze a C++ project
+perfguardian list-rules                   List all available rules
+perfguardian dump-ast <file>              Dump the Clang AST for one file (debugging)
+perfguardian --version                    Print version
+perfguardian --help                       Full help text
+```
+
+### `analyze` options
+
+| Option | Description |
 |---|---|
-| Large object passed by value (PG001) | Phase 3 |
-| Missing `const&` (PG002) | Phase 4 |
-| Missing `reserve()` (PG003) | Phase 4 |
-| `find()` inside loop (PG004) | Phase 4 |
-| Repeated temporaries (PG005) | Phase 4 |
-| Repeated map lookups (PG006) | Phase 4 |
-| Whole-project aggregation | Phase 5 |
-| JSON report | Phase 6 |
-| HTML dashboard | Phase 7 |
-| `.perfguardian.yaml` config | Phase 8 |
-| SARIF + GitHub Actions | Phase 9 |
-| Baseline comparison | Phase 10 |
+| `<path>` | Project directory to analyze (default: `.`) |
+| `--json FILE` | Write a JSON report to `FILE` |
+| `--html FILE` | Write an HTML dashboard to `FILE` |
+| `--sarif FILE` | Write a SARIF 2.1.0 report (GitHub code scanning) to `FILE` |
+| `--fail-on SEVERITY` | Exit non-zero if any issue at or above `SEVERITY` is found (`low`, `medium`, `high`, `critical`) |
+| `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run |
 
 ---
 
-## CLI Usage
+## Rules
 
-```bash
-perfguardian analyze .                         # Analyze current directory
-perfguardian analyze . --html report.html      # + HTML dashboard
-perfguardian analyze . --json report.json      # + JSON report
-perfguardian analyze . --sarif report.sarif    # + SARIF (GitHub code scanning)
-perfguardian analyze . --fail-on high          # Exit non-zero if HIGH+ issues found
-perfguardian analyze . --baseline prev.json    # Compare against previous run
-perfguardian list-rules                        # Show all available rules
-perfguardian dump-ast src/game.cpp             # Dump Clang AST (debug)
-```
+| ID | Name | What it catches |
+|---|---|---|
+| PG001 | `large-object-by-value` | A parameter larger than the size threshold passed by value instead of `const&` |
+| PG002 | `missing-const-ref` | A reference parameter that is never mutated and should be `const&` |
+| PG003 | `reserve-before-loop` | A container grown in a loop with no preceding `reserve()` |
+| PG004 | `find-in-loop` | A linear `find()` / lookup performed inside a loop |
+| PG005 | `large-local-copy` | A large local variable copied where a reference would do |
+| PG006 | `repeated-map-lookup` | The same key looked up in a map more than once |
 
----
+Run `perfguardian list-rules` for the live catalog.
 
-## Example Output
+### Example finding
 
 ```
 [HIGH] src/game.cpp:45:12
   Rule: PG001 large-object-by-value
   Parameter 'p' of type 'Player' is 800 bytes, passed by value
-  Estimated copy cost: 80 MB/sec at 100k calls/sec
   Suggested fix: const Player&
-  Expected improvement: 10-30%
 ```
 
 ---
 
 ## Configuration
 
-Create `.perfguardian.yaml` in your project root:
+Drop a `.perfguardian.yaml` file in your project root. Every key is optional;
+unset rules use their built-in defaults.
 
 ```yaml
-size_threshold_bytes: 64
-fail_on_severity: high
-html_report: report.html
-json_report: report.json
-enabled_rules:
-  - pass_by_value
-  - reserve_vector
-suppressed_paths:
-  - third_party/
+version: 1
+
+rules:
+  PG001:
+    enabled: true
+    size_threshold_bytes: 64      # flag parameters larger than this
+  PG003:
+    enabled: true
+  PG005:
+    copy_size_threshold: 128      # flag local copies larger than this
+  PG006:
+    min_repeat_count: 2           # flag keys looked up at least this many times
+
+# Silence specific findings. A suppression matches when every field it
+# specifies matches the diagnostic. `function` and `file` accept * and ? globs.
+suppressions:
+  - rule: PG001
+    file: third_party/*
+  - rule: PG004
+    function: legacy_*
 ```
+
+To disable a rule entirely, set `enabled: false` under its ID.
 
 ---
 
-## Building from Source
+## CI integration
 
-**Requirements:**
+PerfGuardian emits SARIF 2.1.0, which GitHub Code Scanning ingests directly. A minimal
+workflow step:
+
+```yaml
+- name: Run PerfGuardian
+  run: |
+    perfguardian analyze . --sarif results.sarif --fail-on high
+
+- name: Upload results to code scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+    category: perfguardian
+```
+
+Findings then appear inline on pull requests under the **Security** tab.
+
+### Baseline workflow
+
+To allow existing issues but block new ones, save a JSON report from your main branch
+and diff against it:
+
+```bash
+# On main, record the current state
+perfguardian analyze . --json baseline.json
+
+# On a PR, fail only if the PR introduces new findings
+perfguardian analyze . --baseline baseline.json --fail-on high
+```
+
+Baseline matching is line-number-stable: a finding that merely shifts to a different
+line is treated as the same issue, not a new one.
+
+---
+
+## Build from source
+
+**Requirements**
+
 - CMake 3.20+
-- C++20 compiler (GCC 12+, Clang 16+, MSVC 2022+)
-- LLVM/Clang development libraries (Phase 1+)
+- A C++20 compiler (GCC 12+, Clang 16+, or MSVC 2022+)
+- LLVM/Clang development libraries (libclang)
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DPERFGUARDIAN_BUILD_TESTS=ON
@@ -98,46 +198,54 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+All other dependencies (CLI11, nlohmann/json, spdlog, yaml-cpp, GoogleTest) are fetched
+automatically via CMake `FetchContent`.
+
+<details>
+<summary>Windows (MSYS2 / MinGW64)</summary>
+
+PerfGuardian builds on Windows with the MSYS2 MinGW64 toolchain:
+
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake \
+          mingw-w64-x86_64-ninja mingw-w64-x86_64-clang \
+          mingw-w64-x86_64-llvm
+
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+The MinGW64 `bin` directory must be on `PATH` at runtime so the bundled
+`libclang.dll` and GCC runtime DLLs resolve.
+</details>
+
 ---
 
-## Architecture
+## How it works
 
 ```
-C++ Project
-    |
-compile_commands.json
-    |
-CLI Frontend (cli/)
-    |
-Project Loader --> Clang AST Parser
-    |
-Symbol Database (types, functions, sizes, call graph)
-    |
-Rule Engine --> Metrics Engine --> Suggestion Engine
-    |
-Report Generator (CLI / JSON / HTML / SARIF)
-    |
-CI/CD Integration (GitHub Actions, exit codes)
+C++ project + compile_commands.json
+        │
+        ▼
+   Project loader ──► Clang AST parser (libclang)
+        │
+        ▼
+   Symbol database  (types, sizes, functions, call sites)
+        │
+        ▼
+   Rule engine  ──►  Hotspot ranker
+        │
+        ▼
+   Reporters  ──►  text · JSON · HTML · SARIF
+        │
+        ▼
+   CI gate (exit codes, baseline diff)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ---
 
-## Tech Stack
-
-- **C++20** - core language
-- **LLVM/Clang LibTooling** - AST parsing and type sizes
-- **CMake** - build system with FetchContent deps
-- **nlohmann/json** - JSON report emission
-- **yaml-cpp** - config file parsing
-- **spdlog** - structured logging
-- **CLI11** - command-line argument parsing
-- **GoogleTest** - unit and integration tests
-- **GitHub Actions** - CI matrix (Ubuntu + macOS)
-
----
-
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
