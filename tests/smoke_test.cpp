@@ -46,7 +46,7 @@ TEST(Version, MajorMinorPatch) {
 TEST(Version, ConstexprStr) {
     // version_str must be a literal-compatible constexpr string
     static_assert(perfguardian::version_major == 0);
-    static_assert(perfguardian::version_minor == 1);
+    static_assert(perfguardian::version_minor == 2);
     static_assert(perfguardian::version_patch == 0);
     SUCCEED();
 }
