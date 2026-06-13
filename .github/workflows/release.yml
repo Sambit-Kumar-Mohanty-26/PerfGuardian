@@ -29,6 +29,10 @@ jobs:
             target: macos-arm64
             artifact: perfguardian-macos-arm64.tar.gz
 
+          - os: windows-latest
+            target: windows-x86_64
+            artifact: perfguardian-windows-x86_64.zip
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +46,21 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install llvm cmake ninja
 
-      - name: Configure CMake
+      - name: Install MSYS2 + MinGW64 + LLVM (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-llvm
+
+      - name: Configure CMake (Linux / macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           EXTRA=""
@@ -56,22 +74,45 @@ jobs:
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             $EXTRA
 
-      - name: Build
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPERFGUARDIAN_BUILD_TESTS=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -G Ninja
+
+      - name: Build (Linux / macOS)
+        if: runner.os != 'Windows'
         run: |
           JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
           cmake --build build --parallel "$JOBS"
 
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
       - name: Strip binary
+        if: runner.os != 'Windows'
         shell: bash
         run: strip build/bin/perfguardian
 
-      - name: Smoke test
+      - name: Smoke test (Linux / macOS)
+        if: runner.os != 'Windows'
         run: ./build/bin/perfguardian --version
 
-      - name: Package tarball
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: ./build/bin/perfguardian.exe --version
+
+      - name: Package tarball (Linux / macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME}"          # e.g. v0.1.0
           ARTIFACT="${{ matrix.artifact }}"
           mkdir -p dist
           cp build/bin/perfguardian dist/
@@ -80,12 +121,31 @@ jobs:
           tar czf "../${ARTIFACT}" perfguardian LICENSE 2>/dev/null || \
           tar czf "../${ARTIFACT}" perfguardian
           cd ..
-          # SHA256 — Linux uses sha256sum, macOS uses shasum -a 256
           if command -v sha256sum &>/dev/null; then
             sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
           else
             shasum -a 256 "${ARTIFACT}" > "${ARTIFACT}.sha256"
           fi
+          echo "Built ${ARTIFACT}"
+          cat "${ARTIFACT}.sha256"
+
+      - name: Package zip (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ARTIFACT="${{ matrix.artifact }}"
+          mkdir -p dist
+          cp build/bin/perfguardian.exe dist/
+          # Bundle required MinGW runtime DLLs
+          for dll in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+            cp "/mingw64/bin/${dll}" dist/ 2>/dev/null || true
+          done
+          # libclang.dll is already copied by CMake into build/bin
+          cp build/bin/libclang.dll dist/ 2>/dev/null || true
+          cd dist
+          7z a "../${ARTIFACT}" * > /dev/null
+          cd ..
+          sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
           echo "Built ${ARTIFACT}"
           cat "${ARTIFACT}.sha256"
 
