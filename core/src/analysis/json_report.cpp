@@ -74,6 +74,7 @@ std::string to_json_string(const AnalysisReport& report,
             {"rule_id",       d.rule_id},
             {"rule_name",     d.rule_name},
             {"severity",      std::string(to_string(d.severity))},
+            {"confidence",    std::string(to_string(d.confidence))},
             {"function_name", d.function_name},
             {"location", {
                 {"file",   d.location.file},

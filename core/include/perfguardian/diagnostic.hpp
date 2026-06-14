@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include "perfguardian/severity.hpp"
+#include "perfguardian/confidence.hpp"
 
 namespace perfguardian {
 
@@ -29,6 +30,7 @@ struct Diagnostic {
     std::string rule_id;          // e.g. "PG001"
     std::string rule_name;        // e.g. "large-object-by-value"
     Severity    severity = Severity::Medium;
+    Confidence  confidence = Confidence::Medium;  // how sure the rule is
     Location    location;
     std::string function_name;    // qualified name of the enclosing function
     std::string message;          // human-readable explanation
@@ -53,6 +55,16 @@ public:
         std::vector<Diagnostic> result;
         for (const auto& d : diagnostics_) {
             if (severity_weight(d.severity) >= severity_weight(min_severity)) {
+                result.push_back(d);
+            }
+        }
+        return result;
+    }
+
+    std::vector<Diagnostic> with_confidence(Confidence min_confidence) const {
+        std::vector<Diagnostic> result;
+        for (const auto& d : diagnostics_) {
+            if (confidence_weight(d.confidence) >= confidence_weight(min_confidence)) {
                 result.push_back(d);
             }
         }

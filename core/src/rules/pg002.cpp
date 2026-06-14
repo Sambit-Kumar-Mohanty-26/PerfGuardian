@@ -25,6 +25,7 @@ void RulePG002::run(const SymbolDB& db, DiagnosticSink& sink,
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
             d.severity      = Severity::Medium;
+            d.confidence    = Confidence::Medium;  // mutation analysis is conservative
             d.location      = {fn.file, fn.line, fn.column};
             d.function_name = fn.qualified_name;
             d.message   = "Parameter '" + pname + "' of type '" +

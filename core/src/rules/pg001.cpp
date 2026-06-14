@@ -34,6 +34,7 @@ void RulePG001::run(const SymbolDB& db, DiagnosticSink& sink,
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
             d.severity       = Severity::High;
+            d.confidence     = Confidence::High;   // copyable large value is clear-cut
             d.location       = {fn.file, fn.line, fn.column};
             d.function_name  = fn.qualified_name;
             d.message   = "Parameter '" + param_name + "' of type '" +

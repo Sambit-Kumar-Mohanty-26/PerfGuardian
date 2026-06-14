@@ -136,7 +136,8 @@ static int cmd_analyze(const std::string& path,
                        const std::string& html_out,
                        const std::string& sarif_out,
                        const std::string& fail_on,
-                       const std::string& baseline_path) {
+                       const std::string& baseline_path,
+                       const std::string& min_confidence) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -251,6 +252,21 @@ static int cmd_analyze(const std::string& path,
     // Phase 8: apply suppressions after running rules
     cfg.apply_suppressions(sink);
 
+    // Phase 13: drop findings below the confidence threshold (default: keep all)
+    if (!min_confidence.empty()) {
+        try {
+            auto min_conf = perfguardian::confidence_from_string(min_confidence);
+            sink.remove_if([&](const perfguardian::Diagnostic& d) {
+                return perfguardian::confidence_weight(d.confidence) <
+                       perfguardian::confidence_weight(min_conf);
+            });
+        } catch (...) {
+            std::cerr << "Unknown confidence '" << min_confidence
+                      << "'. Valid: low medium high\n";
+            return 2;
+        }
+    }
+
     auto report = perfguardian::rank_hotspots(sink);
     perfguardian::print_report(report, db);
 
@@ -303,6 +319,8 @@ static int cmd_analyze(const std::string& path,
         std::cout << "─────────────────────────────────────────────────────────\n";
         for (const auto& d : sink.all()) {
             std::cout << "[" << d.rule_id << "] "
+                      << "(" << perfguardian::confidence_label(d.confidence)
+                      << " confidence) "
                       << fs::path(d.location.file).filename().string()
                       << ":" << d.location.line
                       << "  " << d.message << "\n"
@@ -344,7 +362,7 @@ int main(int argc, char** argv) {
     // analyze 
     auto* analyze_cmd = app.add_subcommand("analyze", "Analyze a C++ project for performance issues");
     std::string analyze_path = ".";
-    std::string json_out, html_out, sarif_out, fail_on, baseline;
+    std::string json_out, html_out, sarif_out, fail_on, baseline, min_confidence;
 
     analyze_cmd->add_option("path", analyze_path, "Project directory to analyze")->default_val(".");
     analyze_cmd->add_option("--json",     json_out,  "Write JSON report to FILE");
@@ -352,6 +370,8 @@ int main(int argc, char** argv) {
     analyze_cmd->add_option("--sarif",    sarif_out, "Write SARIF report to FILE");
     analyze_cmd->add_option("--fail-on",  fail_on,   "Exit non-zero if any issue at or above SEVERITY");
     analyze_cmd->add_option("--baseline", baseline,  "Compare against a previous JSON report");
+    analyze_cmd->add_option("--min-confidence", min_confidence,
+                            "Only report findings at or above CONFIDENCE (low|medium|high)");
 
     // list-rules 
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
@@ -365,7 +385,8 @@ int main(int argc, char** argv) {
     CLI11_PARSE(app, argc, argv);
 
     if (*analyze_cmd) {
-        return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on, baseline);
+        return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on,
+                           baseline, min_confidence);
     }
     if (*list_rules_cmd) {
         return cmd_list_rules();

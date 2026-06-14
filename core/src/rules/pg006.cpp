@@ -36,6 +36,7 @@ void RulePG006::run(const SymbolDB& db, DiagnosticSink& sink,
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
             d.severity      = Severity::Medium;
+            d.confidence    = Confidence::Low;  // token-based key matching is approximate
             int fl          = first_line.count(key) ? first_line[key] : fn.line;
             d.location      = {fn.file, fl > 0 ? fl : fn.line, fn.column};
             d.function_name = fn.qualified_name;

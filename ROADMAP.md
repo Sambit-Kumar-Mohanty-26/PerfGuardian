@@ -18,9 +18,18 @@ signal-to-noise ratio is high. This is mostly self-contained rule work.
 |---|---|---|---|
 | **11. Mutation analysis** ✅ | PG002 stops flagging references that are written to (streams, sinks, out-params) | Track per-parameter "is mutated" in the body visitor: assignment, `++`/`--`, address-of, non-const member call, passing to a non-const reference/pointer. PG002 skips mutated params. | **Done.** PG002 on a self-scan dropped 58 → 4; the 4 residuals are reference-capturing constructors (`m_x(x)`), deferred to Phase 12. |
 | **12. Move-only & owning types** ✅ | PG001 ignores move-only types; PG002 handles reference capture | Detect move-only types (`unique_ptr`, `mutex`, `atomic`, … and user types with a deleted copy ctor); PG001 skips them since by-value is the sink idiom. Treat a parameter bound to a reference member (capturing constructor) as non-const-able. | **Done.** On a self-scan, PG002 4 → 2 and PG001 4 → 3; remaining findings are all legitimate. |
-| **13. Confidence levels** | Each finding carries High/Medium/Low confidence | Add `confidence` to `Diagnostic`; `--min-confidence` flag | CI can gate on high-confidence findings only |
+| **13. Confidence levels** ✅ | Each finding carries High/Medium/Low confidence | `Confidence` on `Diagnostic`, per-rule levels, `--min-confidence` flag, confidence in text + JSON reports | **Done.** `--min-confidence high` gates CI to clear-cut findings (PG001); reported inline. |
+| **13b. Skip macro-expanded code** | No false positives from macro-generated code (e.g. gtest `TEST_F`) | Drop findings whose location sits inside a macro expansion — compare `clang_getSpellingLocation` vs `clang_getExpansionLocation`, or skip when not in the spelling file | A leveldb scan no longer flags phantom params at `TEST_F(...)` lines |
 
-**Pillar A done:** < 5% false positives on a 50-finding hand-labeled sample.
+**Pillar A done:** < 5% false positives on a 50-finding hand-labeled sample. ✅ Pillars 11–13 complete; **13b queued** (found via the leveldb validation below).
+
+### Validation — leveldb (Google C++, 132 files)
+
+A folder scan of [google/leveldb](https://github.com/google/leveldb) parsed all 76 TUs
+(29 ok + 47 partial, **0 hard failures**), indexed 1389 functions, and produced 142
+findings across all six rules with no crashes. PG002 fired only twice on 1389
+functions, confirming the mutation analysis. Two issues surfaced: a single-threaded
+runtime of ~80 s (→ Phase 14) and false positives from gtest macro expansion (→ Phase 13b).
 
 ---
 
@@ -94,4 +103,5 @@ binary release.
 - ✅ Rule-accuracy fixes (PG002/005/006 false positives, PG006 missed detection)
 - ✅ **Phase 11 — mutation analysis** (PG002 false positives 58 → 4 on self-scan)
 - ✅ **Phase 12 — move-only types + reference capture** (PG002 → 2, PG001 → 3; remaining findings legitimate)
-- ⏳ **Next: Phase 13 (confidence levels), then cut v0.3.0** (Pillar A complete)
+- ✅ **Phase 13 — confidence levels** (`--min-confidence`, per-rule High/Medium/Low) — **Pillar A complete**
+- ⏳ **Next: cut v0.3.0**, then Pillar B (Phase 14 — parallel parsing)

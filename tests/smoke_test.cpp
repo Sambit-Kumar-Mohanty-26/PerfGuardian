@@ -732,6 +732,39 @@ TEST(PG006, AllRulesRegistered) {
     }
 }
 
+// ── Phase 13 — Confidence ─────────────────────────────────────────────────────
+
+TEST(Confidence, SinkFiltersByConfidence) {
+    perfguardian::DiagnosticSink sink;
+    perfguardian::Diagnostic hi;  hi.rule_id = "A"; hi.confidence = perfguardian::Confidence::High;
+    perfguardian::Diagnostic med; med.rule_id = "B"; med.confidence = perfguardian::Confidence::Medium;
+    perfguardian::Diagnostic lo;  lo.rule_id = "C"; lo.confidence = perfguardian::Confidence::Low;
+    sink.emit(hi); sink.emit(med); sink.emit(lo);
+
+    EXPECT_EQ(sink.with_confidence(perfguardian::Confidence::Low).size(),    3u);
+    EXPECT_EQ(sink.with_confidence(perfguardian::Confidence::Medium).size(), 2u);
+    EXPECT_EQ(sink.with_confidence(perfguardian::Confidence::High).size(),   1u);
+}
+
+TEST(Confidence, RulesAssignExpectedLevels) {
+    // PG001 is clear-cut (High); PG006 is token-heuristic (Low).
+    perfguardian::SymbolDB db1;
+    db1.add(make_result_with_function("f", {make_param("p", "Big", 800)}));
+    perfguardian::DiagnosticSink s1;
+    perfguardian::RulePG001{}.run(db1, s1, {});
+    ASSERT_EQ(s1.count(), 1u);
+    EXPECT_EQ(s1.all()[0].confidence, perfguardian::Confidence::High);
+
+    perfguardian::SymbolDB db2;
+    db2.add(make_result_with_calls("g", {
+        make_call("find", false, 0, 5), make_call("find", false, 0, 8),
+    }));
+    perfguardian::DiagnosticSink s2;
+    perfguardian::RulePG006{}.run(db2, s2, {});
+    ASSERT_EQ(s2.count(), 1u);
+    EXPECT_EQ(s2.all()[0].confidence, perfguardian::Confidence::Low);
+}
+
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────
 
 namespace {

@@ -21,6 +21,7 @@ void RulePG005::run(const SymbolDB& db, DiagnosticSink& sink,
             d.rule_id   = std::string(rule_id());
             d.rule_name = std::string(rule_name());
             d.severity      = Severity::Low;
+            d.confidence    = Confidence::Medium;  // local-mutation not verified
             d.location      = {fn.file, lv.line > 0 ? lv.line : fn.line, 0};
             d.function_name = fn.qualified_name;
             d.message   = "Local variable '" + vname + "' of type '" +
