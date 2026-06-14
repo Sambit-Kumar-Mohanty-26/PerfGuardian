@@ -16,6 +16,9 @@ struct ParamInfo {
     bool        is_rvalue_ref;   // true for T&&
     bool        is_mutated = false; // written to in the body (assignment, non-const
                                     // method call, passed to non-const ref, etc.)
+                                    // also set when captured by a reference member
+    bool        is_move_only = false; // type can't be copied (unique_ptr, mutex,
+                                      // atomic, …) — by-value is the sink idiom
 };
 
 // A call expression captured inside a function body (Phase 4)

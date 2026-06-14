@@ -16,6 +16,11 @@ void RulePG001::run(const SymbolDB& db, DiagnosticSink& sink,
             if (param.is_reference || param.is_pointer || param.is_rvalue_ref) {
                 continue;
             }
+            // Move-only types (unique_ptr, mutex, …) can't be copied — taking
+            // them by value is the sink idiom, not an accidental copy.
+            if (param.is_move_only) {
+                continue;
+            }
 
             const long long sz = param.type_size_bytes;
             if (sz < 0 || sz <= threshold) {

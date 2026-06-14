@@ -38,6 +38,42 @@ static std::string bare_type_name(CXType type) {
     return s;
 }
 
+// True if the type's spelling names a well-known non-copyable (move-only) type.
+// Catches containers of unique_ptr too, where the deleted-copy is only realised
+// on instantiation and so isn't visible on the template's copy constructor.
+static bool spelling_is_move_only(const std::string& s) {
+    static const char* kTokens[] = {
+        "unique_ptr", "std::thread", "std::mutex", "std::recursive_mutex",
+        "std::atomic", "std::unique_lock", "std::lock_guard", "std::scoped_lock",
+        "std::future", "std::promise", "std::condition_variable"
+    };
+    for (const char* t : kTokens) {
+        if (s.find(t) != std::string::npos) return true;
+    }
+    return false;
+}
+
+static CXChildVisitResult find_deleted_copy(CXCursor c, CXCursor /*parent*/,
+                                            CXClientData data) {
+    if (clang_getCursorKind(c) == CXCursor_Constructor &&
+        clang_CXXConstructor_isCopyConstructor(c) != 0 &&
+        clang_getCursorAvailability(c) == CXAvailability_NotAvailable) {
+        *static_cast<bool*>(data) = true;
+        return CXChildVisit_Break;
+    }
+    return CXChildVisit_Continue;
+}
+
+// True if the type's own class has an explicitly deleted copy constructor
+// (a user-defined move-only type).
+static bool type_has_deleted_copy(CXType type) {
+    CXCursor decl = clang_getTypeDeclaration(type);
+    if (clang_Cursor_isNull(decl)) return false;
+    bool deleted = false;
+    clang_visitChildren(decl, find_deleted_copy, &deleted);
+    return deleted;
+}
+
 static ParamInfo make_param_info(CXCursor param_cursor) {
     ParamInfo p;
     p.name = cx_to_string(clang_getCursorSpelling(param_cursor));
@@ -67,6 +103,9 @@ static ParamInfo make_param_info(CXCursor param_cursor) {
 
     long long sz = clang_Type_getSizeOf(canonical);
     p.type_size_bytes = (sz >= 0) ? sz : -1;
+
+    p.is_move_only = spelling_is_move_only(p.type_spelling) ||
+                     type_has_deleted_copy(canonical);
 
     return p;
 }
@@ -190,6 +229,42 @@ static void mark_call(CXTranslationUnit tu, CXCursor cursor,
         CXCursor arg = clang_Cursor_getArgument(cursor, i);
         for (auto& p : param_idents_in(tu, arg, params)) mutated.insert(p);
     }
+}
+
+// Collects the names of a class's reference-typed data members.
+static CXChildVisitResult collect_ref_members(CXCursor c, CXCursor /*parent*/,
+                                              CXClientData data) {
+    if (clang_getCursorKind(c) == CXCursor_FieldDecl &&
+        clang_getCursorType(c).kind == CXType_LValueReference) {
+        static_cast<std::set<std::string>*>(data)
+            ->insert(cx_to_string(clang_getCursorSpelling(c)));
+    }
+    return CXChildVisit_Continue;
+}
+
+// A parameter bound to a reference data member in a constructor's initializer
+// list (`Foo(Bar& b) : m_b(b)`) escapes by reference and cannot be made const.
+// Detected by scanning for `<ref-member> ( <param>` / `<ref-member> { <param>`.
+static void mark_reference_captures(CXTranslationUnit tu, CXCursor ctor,
+                                    const std::set<std::string>& params,
+                                    std::set<std::string>& captured) {
+    std::set<std::string> ref_members;
+    clang_visitChildren(clang_getCursorSemanticParent(ctor),
+                        collect_ref_members, &ref_members);
+    if (ref_members.empty()) return;
+
+    CXToken* toks = nullptr; unsigned n = 0;
+    clang_tokenize(tu, clang_getCursorExtent(ctor), &toks, &n);
+    for (unsigned i = 0; i + 2 < n; ++i) {
+        if (clang_getTokenKind(toks[i]) != CXToken_Identifier) continue;
+        std::string m = cx_to_string(clang_getTokenSpelling(tu, toks[i]));
+        if (!ref_members.count(m)) continue;
+        std::string open = cx_to_string(clang_getTokenSpelling(tu, toks[i + 1]));
+        if (open != "(" && open != "{") continue;
+        std::string arg = cx_to_string(clang_getTokenSpelling(tu, toks[i + 2]));
+        if (params.count(arg)) captured.insert(std::move(arg));
+    }
+    clang_disposeTokens(tu, toks, n);
 }
 
 // Builds a signature for a lookup call expression from its source tokens:
@@ -396,6 +471,10 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
                 if (!p.name.empty()) bd.param_names.insert(p.name);
             }
             clang_visitChildren(cursor, visit_body, &bd);
+            // A constructor may capture a parameter into a reference member.
+            if (clang_getCursorKind(cursor) == CXCursor_Constructor) {
+                mark_reference_captures(data->tu, cursor, bd.param_names, bd.mutated);
+            }
             for (auto& p : fn.params) {
                 if (bd.mutated.count(p.name)) p.is_mutated = true;
             }

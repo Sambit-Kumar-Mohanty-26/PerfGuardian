@@ -17,7 +17,7 @@ signal-to-noise ratio is high. This is mostly self-contained rule work.
 | Phase | Goal | Key work | Done when |
 |---|---|---|---|
 | **11. Mutation analysis** ✅ | PG002 stops flagging references that are written to (streams, sinks, out-params) | Track per-parameter "is mutated" in the body visitor: assignment, `++`/`--`, address-of, non-const member call, passing to a non-const reference/pointer. PG002 skips mutated params. | **Done.** PG002 on a self-scan dropped 58 → 4; the 4 residuals are reference-capturing constructors (`m_x(x)`), deferred to Phase 12. |
-| **12. Move-only & owning types** | PG001 reasons about copy cost, not just `sizeof`; PG002 handles reference capture | Detect move-only / heap-owning types (`vector`, `string`, `unique_ptr`); a `std::vector` by value is a real copy despite a 24-byte handle. Also: treat a parameter bound to a reference member (capturing constructor) as non-const-able. | Precision ≥ 90% on a labeled corpus |
+| **12. Move-only & owning types** ✅ | PG001 ignores move-only types; PG002 handles reference capture | Detect move-only types (`unique_ptr`, `mutex`, `atomic`, … and user types with a deleted copy ctor); PG001 skips them since by-value is the sink idiom. Treat a parameter bound to a reference member (capturing constructor) as non-const-able. | **Done.** On a self-scan, PG002 4 → 2 and PG001 4 → 3; remaining findings are all legitimate. |
 | **13. Confidence levels** | Each finding carries High/Medium/Low confidence | Add `confidence` to `Diagnostic`; `--min-confidence` flag | CI can gate on high-confidence findings only |
 
 **Pillar A done:** < 5% false positives on a 50-finding hand-labeled sample.
@@ -93,4 +93,5 @@ binary release.
 - ✅ Real multi-file project parsing (compile_commands.json + inferred includes + partial recovery)
 - ✅ Rule-accuracy fixes (PG002/005/006 false positives, PG006 missed detection)
 - ✅ **Phase 11 — mutation analysis** (PG002 false positives 58 → 4 on self-scan)
-- ⏳ **Next: cut v0.2.1**, then Phase 12 (move-only types + reference capture)
+- ✅ **Phase 12 — move-only types + reference capture** (PG002 → 2, PG001 → 3; remaining findings legitimate)
+- ⏳ **Next: Phase 13 (confidence levels), then cut v0.3.0** (Pillar A complete)

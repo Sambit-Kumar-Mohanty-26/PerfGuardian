@@ -178,6 +178,26 @@ TEST(PG001, SkipsConstRef) {
     EXPECT_TRUE(sink.empty());
 }
 
+TEST(PG001, SkipsMoveOnlyByValue) {
+    // A move-only type (e.g. vector<unique_ptr<...>>) taken by value is the sink
+    // idiom, not an accidental copy — it cannot be a const& and must not fire.
+    perfguardian::SymbolDB db;
+    perfguardian::ParamInfo p;
+    p.name            = "rules";
+    p.type_spelling   = "std::vector<std::unique_ptr<IRule>>";
+    p.type_size_bytes = 800;  // large enough to clear any threshold
+    p.is_reference    = false;
+    p.is_pointer      = false;
+    p.is_rvalue_ref   = false;
+    p.is_move_only    = true;
+    db.add(make_result_with_function("setRules", {p}));
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::RulePG001 rule;
+    rule.run(db, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
 TEST(PG001, SkipsPointer) {
     perfguardian::SymbolDB db;
     db.add(make_result_with_function(
