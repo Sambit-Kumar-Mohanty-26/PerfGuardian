@@ -74,6 +74,39 @@ static bool type_has_deleted_copy(CXType type) {
     return deleted;
 }
 
+// True if a cursor's declaration text originates from a macro body (e.g. a
+// function synthesised by gtest's TEST_F). Such declarations aren't written by
+// the user, so flagging their parameters produces phantom findings. The macro
+// invocation site (expansion) and the macro body (spelling) live at different
+// offsets, so a mismatch identifies macro-generated code.
+static bool is_macro_generated(CXCursor cursor) {
+    CXSourceLocation loc = clang_getCursorLocation(cursor);
+    CXFile exp_file, spell_file;
+    unsigned exp_off = 0, spell_off = 0;
+    clang_getExpansionLocation(loc, &exp_file, nullptr, nullptr, &exp_off);
+    clang_getSpellingLocation(loc, &spell_file, nullptr, nullptr, &spell_off);
+    return clang_File_isEqual(exp_file, spell_file) == 0 || exp_off != spell_off;
+}
+
+// When a function-like macro is undefined (e.g. gtest's TEST_F in a folder scan
+// with no compile database), `TEST_F(DBTest, Empty) {…}` is error-recovered as a
+// function named TEST_F with by-value parameters. A real function always spells a
+// return type before its name, so if the first token equals the function name the
+// declaration is a misparse. Constructors/destructors legitimately lack a return
+// type, so this is restricted to plain FunctionDecls.
+static bool looks_like_macro_misparse(CXTranslationUnit tu, CXCursor cursor) {
+    if (clang_getCursorKind(cursor) != CXCursor_FunctionDecl) return false;
+    std::string name = cx_to_string(clang_getCursorSpelling(cursor));
+    if (name.empty()) return false;
+
+    CXToken* toks = nullptr; unsigned n = 0;
+    clang_tokenize(tu, clang_getCursorExtent(cursor), &toks, &n);
+    bool misparse = (n > 0 &&
+                     cx_to_string(clang_getTokenSpelling(tu, toks[0])) == name);
+    clang_disposeTokens(tu, toks, n);
+    return misparse;
+}
+
 static ParamInfo make_param_info(CXCursor param_cursor) {
     ParamInfo p;
     p.name = cx_to_string(clang_getCursorSpelling(param_cursor));
@@ -442,6 +475,14 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
         if (!clang_isCursorDefinition(cursor) &&
             clang_equalCursors(cursor, clang_getCanonicalCursor(cursor)) == 0) {
             return CXChildVisit_Recurse;
+        }
+
+        // Skip declarations that aren't user-authored function signatures: code
+        // synthesised by a macro expansion, or an undefined function-like macro
+        // error-recovered as a function (e.g. gtest TEST_F in a folder scan).
+        if (is_macro_generated(cursor) ||
+            (data->tu && looks_like_macro_misparse(data->tu, cursor))) {
+            return CXChildVisit_Continue;
         }
 
         FunctionDecl fn;

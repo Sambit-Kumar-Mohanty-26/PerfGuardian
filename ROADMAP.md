@@ -19,7 +19,7 @@ signal-to-noise ratio is high. This is mostly self-contained rule work.
 | **11. Mutation analysis** ✅ | PG002 stops flagging references that are written to (streams, sinks, out-params) | Track per-parameter "is mutated" in the body visitor: assignment, `++`/`--`, address-of, non-const member call, passing to a non-const reference/pointer. PG002 skips mutated params. | **Done.** PG002 on a self-scan dropped 58 → 4; the 4 residuals are reference-capturing constructors (`m_x(x)`), deferred to Phase 12. |
 | **12. Move-only & owning types** ✅ | PG001 ignores move-only types; PG002 handles reference capture | Detect move-only types (`unique_ptr`, `mutex`, `atomic`, … and user types with a deleted copy ctor); PG001 skips them since by-value is the sink idiom. Treat a parameter bound to a reference member (capturing constructor) as non-const-able. | **Done.** On a self-scan, PG002 4 → 2 and PG001 4 → 3; remaining findings are all legitimate. |
 | **13. Confidence levels** ✅ | Each finding carries High/Medium/Low confidence | `Confidence` on `Diagnostic`, per-rule levels, `--min-confidence` flag, confidence in text + JSON reports | **Done.** `--min-confidence high` gates CI to clear-cut findings (PG001); reported inline. |
-| **13b. Skip macro-expanded code** | No false positives from macro-generated code (e.g. gtest `TEST_F`) | Drop findings whose location sits inside a macro expansion — compare `clang_getSpellingLocation` vs `clang_getExpansionLocation`, or skip when not in the spelling file | A leveldb scan no longer flags phantom params at `TEST_F(...)` lines |
+| **13b. Skip macro misparses** ✅ | No false positives from macro-generated / undefined-macro code (e.g. gtest `TEST_F`) | Skip macro-expanded declarations (spelling vs expansion location) and undefined function-like macros error-recovered as functions (first token == function name) | **Done.** leveldb scan dropped 58 phantom `TEST_F` findings (PG001 76 → 10). |
 
 **Pillar A done:** < 5% false positives on a 50-finding hand-labeled sample. ✅ Pillars 11–13 complete; **13b queued** (found via the leveldb validation below).
 
@@ -40,7 +40,7 @@ high-impact changes.
 
 | Phase | Goal | Key work | Done when |
 |---|---|---|---|
-| **14. Parallel parsing** | Use all CPU cores | Replace the sequential parse loop in `cli/main.cpp` with a thread pool; one `CXIndex` per thread; merge into `SymbolDB` under a lock | ~Ncores speedup, identical results |
+| **14. Parallel parsing** ✅ | Use all CPU cores | Thread pool over an atomic work index in `cli/main.cpp`; `parse_file` keeps its own `CXIndex`; `SymbolDB` merge under a mutex; `DiagnosticSink::sort()` for reproducible output | **Done.** leveldb 76 TUs: 80 s → 6 s (~13× on 18 cores); output deterministic across runs. |
 | **15. Incremental cache** | Re-analyze only changed files | Hash each TU's source + args; cache results on disk keyed by hash; skip unchanged | Second run on an unchanged repo is near-instant |
 | **16. Memory bounds** | Don't hold the whole repo in RAM | Process and discard per-TU; keep only the symbol summary needed for cross-TU | Constant memory on a 100k-file repo |
 
@@ -104,4 +104,6 @@ binary release.
 - ✅ **Phase 11 — mutation analysis** (PG002 false positives 58 → 4 on self-scan)
 - ✅ **Phase 12 — move-only types + reference capture** (PG002 → 2, PG001 → 3; remaining findings legitimate)
 - ✅ **Phase 13 — confidence levels** (`--min-confidence`, per-rule High/Medium/Low) — **Pillar A complete**
-- ⏳ **Next: cut v0.3.0**, then Pillar B (Phase 14 — parallel parsing)
+- ✅ **Phase 13b — skip macro misparses** (leveldb: 58 phantom `TEST_F` findings removed)
+- ✅ **Phase 14 — parallel parsing** (leveldb: 80 s → 6 s, deterministic)
+- ⏳ **Next: cut v0.3.0**, then Phase 15 (incremental cache)

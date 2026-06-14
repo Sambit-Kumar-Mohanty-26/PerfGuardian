@@ -1,8 +1,11 @@
 add_executable(perfguardian main.cpp)
 
+find_package(Threads REQUIRED)
+
 target_link_libraries(perfguardian PRIVATE
     perfguardian_core
     CLI11::CLI11
+    Threads::Threads
 )
 
 # Place binary at build root so CI smoke tests have a stable path

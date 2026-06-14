@@ -71,6 +71,18 @@ public:
         return result;
     }
 
+    // Sort diagnostics into a stable order (file, line, column, rule) so output
+    // is reproducible regardless of the order translation units were parsed.
+    void sort() {
+        std::sort(diagnostics_.begin(), diagnostics_.end(),
+                  [](const Diagnostic& a, const Diagnostic& b) {
+            if (a.location.file != b.location.file) return a.location.file < b.location.file;
+            if (a.location.line != b.location.line) return a.location.line < b.location.line;
+            if (a.location.column != b.location.column) return a.location.column < b.location.column;
+            return a.rule_id < b.rule_id;
+        });
+    }
+
     // Remove all diagnostics that satisfy pred (used for suppression).
     void remove_if(std::function<bool(const Diagnostic&)> pred) {
         diagnostics_.erase(

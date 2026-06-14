@@ -765,6 +765,30 @@ TEST(Confidence, RulesAssignExpectedLevels) {
     EXPECT_EQ(s2.all()[0].confidence, perfguardian::Confidence::Low);
 }
 
+TEST(Confidence, SinkSortIsDeterministic) {
+    // Phase 14: parallel parsing can insert diagnostics in any order; sort()
+    // must produce a stable file/line/column/rule ordering.
+    perfguardian::DiagnosticSink sink;
+    auto mk = [](const std::string& f, int line, const std::string& rule) {
+        perfguardian::Diagnostic d;
+        d.rule_id = rule; d.location.file = f; d.location.line = line;
+        return d;
+    };
+    sink.emit(mk("b.cpp", 10, "PG002"));
+    sink.emit(mk("a.cpp", 20, "PG001"));
+    sink.emit(mk("a.cpp", 5,  "PG003"));
+    sink.emit(mk("a.cpp", 5,  "PG001"));
+    sink.sort();
+
+    const auto& all = sink.all();
+    ASSERT_EQ(all.size(), 4u);
+    EXPECT_EQ(all[0].location.file, "a.cpp"); EXPECT_EQ(all[0].location.line, 5);
+    EXPECT_EQ(all[0].rule_id, "PG001");  // same file+line → rule_id tiebreak
+    EXPECT_EQ(all[1].rule_id, "PG003");
+    EXPECT_EQ(all[2].location.line, 20);
+    EXPECT_EQ(all[3].location.file, "b.cpp");
+}
+
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────
 
 namespace {

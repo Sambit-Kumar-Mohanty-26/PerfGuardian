@@ -3,6 +3,10 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <vector>
 #include "perfguardian/version.hpp"
 #include "perfguardian/project_loader.hpp"
 #include "perfguardian/symbol_db.hpp"
@@ -176,10 +180,9 @@ static int cmd_analyze(const std::string& path,
         fallback_args.push_back("-std=c++20");
     }
 
-    // Phase 1: parse all translation units
-    perfguardian::SymbolDB db;
-    int parsed = 0, partial = 0, failed = 0;
-    std::string first_error;
+    // Precompute the libclang argument list for each source (cheap, sequential).
+    std::vector<std::pair<std::string, std::vector<std::string>>> work;
+    work.reserve(sources.size());
     for (const auto& src : sources) {
         std::vector<std::string> args;
         if (has_compile_commands) {
@@ -194,28 +197,58 @@ static int cmd_analyze(const std::string& path,
         } else {
             args = fallback_args;
         }
-        auto result = perfguardian::parse_file(src, args);
-        const std::string name = fs::path(src).filename().string();
-        if (result.ok) {
-            ++parsed;
-            db.add(result);
-            std::cout << "  [ok]   " << name
-                      << "  (" << result.functions.size() << " fns, "
-                      << result.types.size() << " types)\n";
-        } else if (!result.functions.empty() || !result.types.empty()) {
-            // Header errors, but the file's own declarations were recovered.
-            ++partial;
-            db.add(result);
-            std::cout << "  [warn] " << name
-                      << "  (" << result.functions.size() << " fns recovered; "
-                      << "header errors)\n";
-        } else {
-            ++failed;
-            if (first_error.empty() && !result.errors.empty())
-                first_error = result.errors.front();
-            std::cout << "  [err]  " << name << "\n";
-        }
+        work.push_back({src, std::move(args)});
     }
+
+    // Phase 14: parse translation units in parallel. parse_file creates its own
+    // CXIndex per call, so concurrent parsing is safe; only the shared SymbolDB
+    // merge and progress output are serialised under a mutex.
+    perfguardian::SymbolDB db;
+    int parsed = 0, partial = 0, failed = 0;
+    std::string first_error;
+    std::mutex mtx;
+    std::atomic<std::size_t> next{0};
+
+    unsigned hw = std::thread::hardware_concurrency();
+    unsigned nthreads = std::max(1u, std::min(hw == 0 ? 4u : hw,
+                                  static_cast<unsigned>(work.size())));
+
+    auto worker = [&]() {
+        for (std::size_t i = next++; i < work.size(); i = next++) {
+            auto result = perfguardian::parse_file(work[i].first, work[i].second);
+            const std::string name = fs::path(work[i].first).filename().string();
+            std::lock_guard<std::mutex> lk(mtx);
+            if (result.ok) {
+                ++parsed;
+                db.add(result);
+                std::cout << "  [ok]   " << name
+                          << "  (" << result.functions.size() << " fns, "
+                          << result.types.size() << " types)\n";
+            } else if (!result.functions.empty() || !result.types.empty()) {
+                // Header errors, but the file's own declarations were recovered.
+                ++partial;
+                db.add(result);
+                std::cout << "  [warn] " << name
+                          << "  (" << result.functions.size() << " fns recovered; "
+                          << "header errors)\n";
+            } else {
+                ++failed;
+                if (first_error.empty() && !result.errors.empty())
+                    first_error = result.errors.front();
+                std::cout << "  [err]  " << name << "\n";
+            }
+        }
+    };
+
+    if (nthreads <= 1) {
+        worker();
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(nthreads);
+        for (unsigned t = 0; t < nthreads; ++t) pool.emplace_back(worker);
+        for (auto& t : pool) t.join();
+    }
+
     std::cout << "\nParsed: " << parsed << " ok, " << partial << " partial, "
               << failed << " failed"
               << "  |  DB: " << db.function_count() << " functions, "
@@ -251,6 +284,9 @@ static int cmd_analyze(const std::string& path,
 
     // Phase 8: apply suppressions after running rules
     cfg.apply_suppressions(sink);
+
+    // Phase 14: stable ordering so parallel parsing yields reproducible reports
+    sink.sort();
 
     // Phase 13: drop findings below the confidence threshold (default: keep all)
     if (!min_confidence.empty()) {
