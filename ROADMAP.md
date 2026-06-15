@@ -41,7 +41,7 @@ high-impact changes.
 | Phase | Goal | Key work | Done when |
 |---|---|---|---|
 | **14. Parallel parsing** ✅ | Use all CPU cores | Thread pool over an atomic work index in `cli/main.cpp`; `parse_file` keeps its own `CXIndex`; `SymbolDB` merge under a mutex; `DiagnosticSink::sort()` for reproducible output | **Done.** leveldb 76 TUs: 80 s → 6 s (~13× on 18 cores); output deterministic across runs. |
-| **15. Incremental cache** | Re-analyze only changed files | Hash each TU's source + args; cache results on disk keyed by hash; skip unchanged | Second run on an unchanged repo is near-instant |
+| **15. Incremental cache** ✅ | Re-analyze only changed files | `--cache-dir`: FNV-1a hash of source + args + version keys a JSON `ParseResult` on disk; unchanged TUs are reused. Header-only changes aren't tracked (documented). | **Done.** leveldb warm run 8.2 s → 0.155 s (~53×), identical findings; per-file invalidation on edit. |
 | **16. Memory bounds** | Don't hold the whole repo in RAM | Process and discard per-TU; keep only the symbol summary needed for cross-TU | Constant memory on a 100k-file repo |
 
 **Pillar B done:** analyze a 5,000-file project in under 30 s warm.
@@ -106,4 +106,5 @@ binary release.
 - ✅ **Phase 13 — confidence levels** (`--min-confidence`, per-rule High/Medium/Low) — **Pillar A complete**
 - ✅ **Phase 13b — skip macro misparses** (leveldb: 58 phantom `TEST_F` findings removed)
 - ✅ **Phase 14 — parallel parsing** (leveldb: 80 s → 6 s, deterministic)
-- ⏳ **Next: cut v0.3.0**, then Phase 15 (incremental cache)
+- ✅ **Phase 15 — incremental cache** (`--cache-dir`; leveldb warm run 8.2 s → 0.155 s)
+- ⏳ **Next: Phase 16 (memory bounds)** completes Pillar B, then cut v0.4.0

@@ -88,6 +88,7 @@ perfguardian --help                       Full help text
 | `--sarif FILE` | Write a SARIF 2.1.0 report (GitHub code scanning) to `FILE` |
 | `--fail-on SEVERITY` | Exit non-zero if any issue at or above `SEVERITY` is found (`low`, `medium`, `high`, `critical`) |
 | `--min-confidence LEVEL` | Only report findings at or above `LEVEL` (`low`, `medium`, `high`); gate CI to clear-cut findings |
+| `--cache-dir DIR` | Cache parsed files in `DIR`; unchanged files are reused on the next run (large repos re-scan near-instantly) |
 | `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run |
 
 ---

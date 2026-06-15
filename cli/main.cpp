@@ -7,6 +7,8 @@
 #include <mutex>
 #include <atomic>
 #include <vector>
+#include <fstream>
+#include <sstream>
 #include "perfguardian/version.hpp"
 #include "perfguardian/project_loader.hpp"
 #include "perfguardian/symbol_db.hpp"
@@ -20,6 +22,8 @@
 #include "perfguardian/config.hpp"
 #include "perfguardian/sarif_report.hpp"
 #include "perfguardian/baseline.hpp"
+#include "perfguardian/parse_cache.hpp"
+#include "perfguardian/clang_parser.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -141,7 +145,8 @@ static int cmd_analyze(const std::string& path,
                        const std::string& sarif_out,
                        const std::string& fail_on,
                        const std::string& baseline_path,
-                       const std::string& min_confidence) {
+                       const std::string& min_confidence,
+                       const std::string& cache_dir) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -204,7 +209,7 @@ static int cmd_analyze(const std::string& path,
     // CXIndex per call, so concurrent parsing is safe; only the shared SymbolDB
     // merge and progress output are serialised under a mutex.
     perfguardian::SymbolDB db;
-    int parsed = 0, partial = 0, failed = 0;
+    int parsed = 0, partial = 0, failed = 0, cached = 0;
     std::string first_error;
     std::mutex mtx;
     std::atomic<std::size_t> next{0};
@@ -213,11 +218,39 @@ static int cmd_analyze(const std::string& path,
     unsigned nthreads = std::max(1u, std::min(hw == 0 ? 4u : hw,
                                   static_cast<unsigned>(work.size())));
 
+    auto read_file = [](const std::string& p) -> std::string {
+        std::ifstream in(p, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+
     auto worker = [&]() {
         for (std::size_t i = next++; i < work.size(); i = next++) {
-            auto result = perfguardian::parse_file(work[i].first, work[i].second);
-            const std::string name = fs::path(work[i].first).filename().string();
+            const std::string& src = work[i].first;
+            const auto& args = work[i].second;
+
+            // Phase 15: try the on-disk cache before parsing.
+            perfguardian::ParseResult result;
+            bool was_cached = false;
+            std::string key;
+            if (!cache_dir.empty()) {
+                key = perfguardian::cache_key(read_file(src), args,
+                                              perfguardian::version_str);
+                if (auto hit = perfguardian::cache_load(cache_dir, key)) {
+                    result = std::move(*hit);
+                    was_cached = true;
+                }
+            }
+            if (!was_cached) {
+                result = perfguardian::parse_file(src, args);
+                if (!cache_dir.empty())
+                    perfguardian::cache_store(cache_dir, key, result);
+            }
+
+            const std::string name = fs::path(src).filename().string();
             std::lock_guard<std::mutex> lk(mtx);
+            if (was_cached) ++cached;
             if (result.ok) {
                 ++parsed;
                 db.add(result);
@@ -250,8 +283,9 @@ static int cmd_analyze(const std::string& path,
     }
 
     std::cout << "\nParsed: " << parsed << " ok, " << partial << " partial, "
-              << failed << " failed"
-              << "  |  DB: " << db.function_count() << " functions, "
+              << failed << " failed";
+    if (!cache_dir.empty()) std::cout << " (" << cached << " from cache)";
+    std::cout << "  |  DB: " << db.function_count() << " functions, "
               << db.type_count() << " types\n";
 
     // Loud warning only if NOTHING usable came out — otherwise "No issues found"
@@ -398,7 +432,7 @@ int main(int argc, char** argv) {
     // analyze 
     auto* analyze_cmd = app.add_subcommand("analyze", "Analyze a C++ project for performance issues");
     std::string analyze_path = ".";
-    std::string json_out, html_out, sarif_out, fail_on, baseline, min_confidence;
+    std::string json_out, html_out, sarif_out, fail_on, baseline, min_confidence, cache_dir;
 
     analyze_cmd->add_option("path", analyze_path, "Project directory to analyze")->default_val(".");
     analyze_cmd->add_option("--json",     json_out,  "Write JSON report to FILE");
@@ -408,6 +442,8 @@ int main(int argc, char** argv) {
     analyze_cmd->add_option("--baseline", baseline,  "Compare against a previous JSON report");
     analyze_cmd->add_option("--min-confidence", min_confidence,
                             "Only report findings at or above CONFIDENCE (low|medium|high)");
+    analyze_cmd->add_option("--cache-dir", cache_dir,
+                            "Cache parsed files in DIR; unchanged files are reused on the next run");
 
     // list-rules 
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
@@ -422,7 +458,7 @@ int main(int argc, char** argv) {
 
     if (*analyze_cmd) {
         return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on,
-                           baseline, min_confidence);
+                           baseline, min_confidence, cache_dir);
     }
     if (*list_rules_cmd) {
         return cmd_list_rules();

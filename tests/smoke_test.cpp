@@ -19,7 +19,9 @@
 #include "perfguardian/config.hpp"
 #include "perfguardian/sarif_report.hpp"
 #include "perfguardian/baseline.hpp"
+#include "perfguardian/parse_cache.hpp"
 #include <nlohmann/json.hpp>
+#include <filesystem>
 
 // Version header
 
@@ -787,6 +789,53 @@ TEST(Confidence, SinkSortIsDeterministic) {
     EXPECT_EQ(all[1].rule_id, "PG003");
     EXPECT_EQ(all[2].location.line, 20);
     EXPECT_EQ(all[3].location.file, "b.cpp");
+}
+
+// ── Phase 15 — Parse cache ────────────────────────────────────────────────────
+
+TEST(ParseCache, KeyIsDeterministicAndSensitive) {
+    using perfguardian::cache_key;
+    std::vector<std::string> args = {"-std=c++20", "-Iinc"};
+    auto k = cache_key("int main(){}", args, "0.3.0");
+
+    EXPECT_EQ(k, cache_key("int main(){}", args, "0.3.0"));      // stable
+    EXPECT_NE(k, cache_key("int main(){ }", args, "0.3.0"));     // content
+    EXPECT_NE(k, cache_key("int main(){}", {"-std=c++17"}, "0.3.0")); // args
+    EXPECT_NE(k, cache_key("int main(){}", args, "0.4.0"));      // version
+}
+
+TEST(ParseCache, StoreLoadRoundTrip) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "pg_cache_test";
+    fs::remove_all(dir);
+
+    perfguardian::ParseResult r;
+    r.source_file = "game.cpp";
+    r.ok = false;  // a partial parse, to check the flag survives
+    perfguardian::FunctionDecl fn;
+    fn.qualified_name = "updatePlayer(Player)";
+    fn.line = 5;
+    perfguardian::ParamInfo p;
+    p.name = "p"; p.type_spelling = "Player"; p.type_size_bytes = 800;
+    p.is_move_only = true;
+    fn.params.push_back(p);
+    r.functions.push_back(fn);
+
+    const std::string key = "abc123";
+    EXPECT_FALSE(perfguardian::cache_load(dir.string(), key).has_value());
+
+    perfguardian::cache_store(dir.string(), key, r);
+    auto loaded = perfguardian::cache_load(dir.string(), key);
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ(loaded->source_file, "game.cpp");
+    EXPECT_FALSE(loaded->ok);
+    ASSERT_EQ(loaded->functions.size(), 1u);
+    EXPECT_EQ(loaded->functions[0].qualified_name, "updatePlayer(Player)");
+    ASSERT_EQ(loaded->functions[0].params.size(), 1u);
+    EXPECT_EQ(loaded->functions[0].params[0].type_size_bytes, 800);
+    EXPECT_TRUE(loaded->functions[0].params[0].is_move_only);
+
+    fs::remove_all(dir);
 }
 
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────
