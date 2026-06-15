@@ -24,6 +24,7 @@ struct ParamInfo {
 // A call expression captured inside a function body (Phase 4)
 struct CallSite {
     std::string callee;           // method/function name, e.g. "push_back", "find"
+    std::string callee_usr;       // USR of the resolved callee, for cross-TU linking
     std::string lookup_target;    // container+key signature, ignoring the operation
                                   // (e.g. "key|m"); empty if not computed
     bool        inside_loop = false;
@@ -49,6 +50,8 @@ struct LocalVar {
 struct FunctionDecl {
     std::string qualified_name;  // e.g. "ns::MyClass::method"
     std::string display_name;    // e.g. "method(Player, int)"
+    std::string usr;             // Phase 17: stable cross-TU identifier
+    bool        is_definition = false; // has a body (vs a forward declaration)
     std::string file;
     int         line    = 0;
     int         column  = 0;
@@ -60,6 +63,7 @@ struct FunctionDecl {
 // A user-defined type (class/struct)
 struct TypeDecl {
     std::string qualified_name;
+    std::string usr;             // Phase 17: stable cross-TU identifier
     std::string file;
     int         line           = 0;
     long long   size_bytes     = -1;  // -1 if incomplete

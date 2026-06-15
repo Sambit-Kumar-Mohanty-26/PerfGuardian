@@ -24,6 +24,7 @@
 #include "perfguardian/baseline.hpp"
 #include "perfguardian/parse_cache.hpp"
 #include "perfguardian/clang_parser.hpp"
+#include "perfguardian/symbol_index.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -205,10 +206,24 @@ static int cmd_analyze(const std::string& path,
         work.push_back({src, std::move(args)});
     }
 
+    // Load config and build the rule set up front so rules can run per-TU.
+    auto cfg_path = perfguardian::find_config(path);
+    perfguardian::PerfGuardianConfig cfg;
+    if (!cfg_path.empty()) {
+        std::cout << "Config: " << cfg_path << "\n";
+        cfg = perfguardian::load_config(cfg_path);
+    }
+    const auto rule_cfg = cfg.to_rule_config();
+    const auto rules = cfg.filter_rules(perfguardian::make_default_rules());
+
     // Phase 14: parse translation units in parallel. parse_file creates its own
-    // CXIndex per call, so concurrent parsing is safe; only the shared SymbolDB
-    // merge and progress output are serialised under a mutex.
-    perfguardian::SymbolDB db;
+    // CXIndex per call, so concurrent parsing is safe; only the shared sink merge
+    // and progress output are serialised under a mutex.
+    // Phase 16: rules run per-TU and each TU's data is discarded immediately, so
+    // peak memory stays bounded by the in-flight TUs rather than the whole repo.
+    perfguardian::DiagnosticSink sink;
+    perfguardian::GlobalSymbolIndex symbol_index;  // Phase 17: cross-TU symbols
+    std::size_t total_functions = 0, total_types = 0;
     int parsed = 0, partial = 0, failed = 0, cached = 0;
     std::string first_error;
     std::mutex mtx;
@@ -248,22 +263,33 @@ static int cmd_analyze(const std::string& path,
                     perfguardian::cache_store(cache_dir, key, result);
             }
 
+            // Run the rules on just this TU, then keep only the diagnostics —
+            // the parsed functions/types are dropped when this scope exits.
+            const std::size_t n_fns = result.functions.size();
+            const std::size_t n_types = result.types.size();
+            perfguardian::DiagnosticSink local_sink;
+            if (n_fns > 0 || n_types > 0) {
+                perfguardian::SymbolDB local_db;
+                local_db.add(result);
+                perfguardian::run_rules(local_db, local_sink, rules, rule_cfg);
+            }
+
             const std::string name = fs::path(src).filename().string();
             std::lock_guard<std::mutex> lk(mtx);
             if (was_cached) ++cached;
+            total_functions += n_fns;
+            total_types += n_types;
+            symbol_index.add(result);  // Phase 17: keep compact cross-TU summaries
+            for (const auto& d : local_sink.all()) sink.emit(d);
             if (result.ok) {
                 ++parsed;
-                db.add(result);
                 std::cout << "  [ok]   " << name
-                          << "  (" << result.functions.size() << " fns, "
-                          << result.types.size() << " types)\n";
-            } else if (!result.functions.empty() || !result.types.empty()) {
+                          << "  (" << n_fns << " fns, " << n_types << " types)\n";
+            } else if (n_fns > 0 || n_types > 0) {
                 // Header errors, but the file's own declarations were recovered.
                 ++partial;
-                db.add(result);
                 std::cout << "  [warn] " << name
-                          << "  (" << result.functions.size() << " fns recovered; "
-                          << "header errors)\n";
+                          << "  (" << n_fns << " fns recovered; header errors)\n";
             } else {
                 ++failed;
                 if (first_error.empty() && !result.errors.empty())
@@ -285,12 +311,15 @@ static int cmd_analyze(const std::string& path,
     std::cout << "\nParsed: " << parsed << " ok, " << partial << " partial, "
               << failed << " failed";
     if (!cache_dir.empty()) std::cout << " (" << cached << " from cache)";
-    std::cout << "  |  DB: " << db.function_count() << " functions, "
-              << db.type_count() << " types\n";
+    std::cout << "  |  analyzed " << total_functions << " functions, "
+              << total_types << " types\n";
+    std::cout << "Symbol index: " << symbol_index.size() << " functions ("
+              << symbol_index.definition_count() << " definitions) "
+              << "resolvable across translation units\n";
 
     // Loud warning only if NOTHING usable came out — otherwise "No issues found"
     // misleads the user into thinking their code was analyzed and is clean.
-    if (failed > 0 && db.function_count() == 0) {
+    if (failed > 0 && total_functions == 0) {
         std::cerr << "\n[warning] " << failed << " of " << (parsed + partial + failed)
                   << " files failed to parse — no code was analyzed.\n";
         if (!first_error.empty())
@@ -302,21 +331,8 @@ static int cmd_analyze(const std::string& path,
                          "and point PerfGuardian at it.\n";
     }
 
-    // Phase 8: load .perfguardian.yaml config (walk up from analysis path)
-    auto cfg_path = perfguardian::find_config(path);
-    perfguardian::PerfGuardianConfig cfg;
-    if (!cfg_path.empty()) {
-        std::cout << "Config: " << cfg_path << "\n";
-        cfg = perfguardian::load_config(cfg_path);
-    }
-    auto rule_cfg = cfg.to_rule_config();
-
-    // Phases 3-5: run rule engine + hotspot ranker
-    auto rules = cfg.filter_rules(perfguardian::make_default_rules());
-    perfguardian::DiagnosticSink sink;
-    perfguardian::run_rules(db, sink, rules, rule_cfg);
-
-    // Phase 8: apply suppressions after running rules
+    // Rules already ran per-TU during parsing (Phase 16); apply suppressions
+    // to the collected diagnostics.
     cfg.apply_suppressions(sink);
 
     // Phase 14: stable ordering so parallel parsing yields reproducible reports
@@ -338,7 +354,7 @@ static int cmd_analyze(const std::string& path,
     }
 
     auto report = perfguardian::rank_hotspots(sink);
-    perfguardian::print_report(report, db);
+    perfguardian::print_report(report, perfguardian::SymbolDB{});
 
     // Phase 6: JSON report
     if (!json_out.empty()) {

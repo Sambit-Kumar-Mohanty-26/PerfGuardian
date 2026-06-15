@@ -389,6 +389,8 @@ static CXChildVisitResult visit_body(CXCursor cursor, CXCursor /*parent*/,
         if (!callee.empty()) {
             CallSite cs;
             cs.callee      = std::move(callee);
+            cs.callee_usr  = cx_to_string(
+                clang_getCursorUSR(clang_getCursorReferenced(cursor)));
             cs.inside_loop = (data->loop_depth > 0);
             cs.loop_depth  = data->loop_depth;
             if (data->tu) cs.lookup_target = lookup_signature(data->tu, cursor);
@@ -487,6 +489,8 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
 
         FunctionDecl fn;
         fn.qualified_name = cx_to_string(clang_getCursorDisplayName(cursor));
+        fn.usr            = cx_to_string(clang_getCursorUSR(cursor));
+        fn.is_definition  = clang_isCursorDefinition(cursor) != 0;
         fn.display_name   = fn.qualified_name;
 
         CXSourceLocation loc = clang_getCursorLocation(cursor);
@@ -530,6 +534,7 @@ static CXChildVisitResult visit_ast(CXCursor cursor, CXCursor /*parent*/,
         if (clang_isCursorDefinition(cursor)) {
             TypeDecl td;
             td.qualified_name = cx_to_string(clang_getCursorDisplayName(cursor));
+            td.usr            = cx_to_string(clang_getCursorUSR(cursor));
 
             CXSourceLocation loc = clang_getCursorLocation(cursor);
             CXFile file;

@@ -20,6 +20,7 @@
 #include "perfguardian/sarif_report.hpp"
 #include "perfguardian/baseline.hpp"
 #include "perfguardian/parse_cache.hpp"
+#include "perfguardian/symbol_index.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 
@@ -836,6 +837,62 @@ TEST(ParseCache, StoreLoadRoundTrip) {
     EXPECT_TRUE(loaded->functions[0].params[0].is_move_only);
 
     fs::remove_all(dir);
+}
+
+// ── Phase 17 — Global symbol index ────────────────────────────────────────────
+
+namespace {
+perfguardian::FunctionDecl make_indexed_fn(const std::string& usr,
+                                           const std::string& name,
+                                           const std::string& file,
+                                           bool is_def) {
+    perfguardian::FunctionDecl fn;
+    fn.usr = usr; fn.qualified_name = name; fn.display_name = name;
+    fn.file = file; fn.line = 1; fn.is_definition = is_def;
+    return fn;
+}
+perfguardian::ParseResult make_tu(const std::string& file,
+                                  std::vector<perfguardian::FunctionDecl> fns) {
+    perfguardian::ParseResult r;
+    r.source_file = file;
+    r.functions = std::move(fns);
+    return r;
+}
+}  // namespace
+
+TEST(SymbolIndex, ResolvesFunctionDefinedInAnotherFile) {
+    // file_a.cpp calls foo() (forward-declared); file_b.cpp defines it.
+    // The index must resolve the call's USR to the definition in file_b.
+    perfguardian::GlobalSymbolIndex idx;
+    idx.add(make_tu("file_a.cpp", {make_indexed_fn("c:@F@foo", "foo()", "file_a.cpp", false)}));
+    idx.add(make_tu("file_b.cpp", {make_indexed_fn("c:@F@foo", "foo()", "file_b.cpp", true)}));
+
+    EXPECT_EQ(idx.size(), 1u);                  // deduped by USR
+    EXPECT_EQ(idx.definition_count(), 1u);
+    const auto* s = idx.find("c:@F@foo");
+    ASSERT_NE(s, nullptr);
+    EXPECT_TRUE(s->is_definition);
+    EXPECT_EQ(s->file, "file_b.cpp");           // resolved to the definition
+}
+
+TEST(SymbolIndex, DefinitionSupersedesDeclarationRegardlessOfOrder) {
+    perfguardian::GlobalSymbolIndex idx;
+    // Definition arrives first, declaration second — definition must win.
+    idx.add(make_tu("b.cpp", {make_indexed_fn("c:@F@bar", "bar()", "b.cpp", true)}));
+    idx.add(make_tu("a.cpp", {make_indexed_fn("c:@F@bar", "bar()", "a.cpp", false)}));
+    const auto* s = idx.find("c:@F@bar");
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->file, "b.cpp");
+}
+
+TEST(SymbolIndex, DistinctSymbolsAndMissingLookup) {
+    perfguardian::GlobalSymbolIndex idx;
+    idx.add(make_tu("x.cpp", {
+        make_indexed_fn("c:@F@a", "a()", "x.cpp", true),
+        make_indexed_fn("c:@F@b", "b()", "x.cpp", true),
+    }));
+    EXPECT_EQ(idx.size(), 2u);
+    EXPECT_EQ(idx.find("c:@F@missing"), nullptr);
 }
 
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────

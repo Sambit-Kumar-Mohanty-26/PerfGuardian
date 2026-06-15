@@ -116,6 +116,7 @@ set(CORE_SOURCES
     src/analysis/sarif_report.cpp      # Phase 9
     src/analysis/baseline.cpp          # Phase 10
     src/analysis/parse_cache.cpp       # Phase 15
+    src/analysis/symbol_index.cpp      # Phase 17
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)

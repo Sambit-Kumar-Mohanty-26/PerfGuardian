@@ -15,14 +15,14 @@ namespace perfguardian {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ParamInfo, name, type_spelling,
     bare_type_spelling, type_size_bytes, is_reference, is_pointer, is_const,
     is_rvalue_ref, is_mutated, is_move_only)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CallSite, callee, lookup_target, inside_loop,
-    loop_depth, file, line)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CallSite, callee, callee_usr, lookup_target,
+    inside_loop, loop_depth, file, line)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LocalVar, name, type_spelling,
     bare_type_spelling, type_size_bytes, is_reference, is_pointer,
     is_copy_initialized, file, line)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FunctionDecl, qualified_name, display_name,
-    file, line, column, params, call_sites, local_vars)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TypeDecl, qualified_name, file, line,
+    usr, is_definition, file, line, column, params, call_sites, local_vars)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(TypeDecl, qualified_name, usr, file, line,
     size_bytes, trivially_copyable)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ParseResult, source_file, functions, types,
     errors, ok)
