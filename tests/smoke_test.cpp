@@ -21,6 +21,7 @@
 #include "perfguardian/baseline.hpp"
 #include "perfguardian/parse_cache.hpp"
 #include "perfguardian/symbol_index.hpp"
+#include "perfguardian/call_graph.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 
@@ -893,6 +894,65 @@ TEST(SymbolIndex, DistinctSymbolsAndMissingLookup) {
     }));
     EXPECT_EQ(idx.size(), 2u);
     EXPECT_EQ(idx.find("c:@F@missing"), nullptr);
+}
+
+// ── Phase 18 — Call graph ─────────────────────────────────────────────────────
+
+namespace {
+perfguardian::FunctionDecl caller_fn(const std::string& usr,
+                                     const std::string& name,
+                                     const std::string& file,
+                                     std::vector<std::string> callee_usrs) {
+    auto fn = make_indexed_fn(usr, name, file, true);
+    for (auto& cu : callee_usrs) {
+        perfguardian::CallSite cs;
+        cs.callee_usr = cu;
+        fn.call_sites.push_back(cs);
+    }
+    return fn;
+}
+}  // namespace
+
+TEST(CallGraph, CallersOfSpanFiles) {
+    // a() in a.cpp and b() in b.cpp both call helper(); helper is defined in c.cpp.
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    auto tu_a = make_tu("a.cpp", {caller_fn("c:@F@a", "a()", "a.cpp", {"c:@F@helper"})});
+    auto tu_b = make_tu("b.cpp", {caller_fn("c:@F@b", "b()", "b.cpp", {"c:@F@helper"})});
+    auto tu_c = make_tu("c.cpp", {make_indexed_fn("c:@F@helper", "helper()", "c.cpp", true)});
+    for (auto* tu : {&tu_a, &tu_b, &tu_c}) { idx.add(*tu); cg.add(*tu); }
+
+    auto callers = cg.callers_of("c:@F@helper");
+    ASSERT_EQ(callers.size(), 2u);
+    EXPECT_EQ(callers[0], "c:@F@a");   // sorted
+    EXPECT_EQ(callers[1], "c:@F@b");
+    EXPECT_EQ(cg.caller_count("c:@F@helper"), 2u);
+}
+
+TEST(CallGraph, PruneDropsExternalCallees) {
+    // main() calls our helper() and std::printf; only the internal edge survives.
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    auto tu = make_tu("m.cpp", {
+        caller_fn("c:@F@main", "main()", "m.cpp", {"c:@F@helper", "c:@F@printf#"}),
+        make_indexed_fn("c:@F@helper", "helper()", "m.cpp", true),
+    });
+    idx.add(tu); cg.add(tu);
+    EXPECT_EQ(cg.edge_count(), 2u);          // both edges before pruning
+
+    cg.prune_to(idx);                        // printf is not in the index
+    EXPECT_EQ(cg.edge_count(), 1u);
+    EXPECT_EQ(cg.caller_count("c:@F@helper"), 1u);
+    EXPECT_EQ(cg.caller_count("c:@F@printf#"), 0u);
+}
+
+TEST(CallGraph, DeduplicatesRepeatedCalls) {
+    perfguardian::CallGraph cg;
+    // f() calls g() twice — one unique edge.
+    auto tu = make_tu("f.cpp", {caller_fn("c:@F@f", "f()", "f.cpp",
+                                          {"c:@F@g", "c:@F@g"})});
+    cg.add(tu);
+    EXPECT_EQ(cg.edge_count(), 1u);
 }
 
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────

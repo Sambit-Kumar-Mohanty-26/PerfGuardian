@@ -7,6 +7,7 @@
 #include <mutex>
 #include <atomic>
 #include <vector>
+#include <unordered_set>
 #include <fstream>
 #include <sstream>
 #include "perfguardian/version.hpp"
@@ -25,6 +26,7 @@
 #include "perfguardian/parse_cache.hpp"
 #include "perfguardian/clang_parser.hpp"
 #include "perfguardian/symbol_index.hpp"
+#include "perfguardian/call_graph.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -223,6 +225,7 @@ static int cmd_analyze(const std::string& path,
     // peak memory stays bounded by the in-flight TUs rather than the whole repo.
     perfguardian::DiagnosticSink sink;
     perfguardian::GlobalSymbolIndex symbol_index;  // Phase 17: cross-TU symbols
+    perfguardian::CallGraph call_graph;            // Phase 18: caller→callee edges
     std::size_t total_functions = 0, total_types = 0;
     int parsed = 0, partial = 0, failed = 0, cached = 0;
     std::string first_error;
@@ -280,6 +283,7 @@ static int cmd_analyze(const std::string& path,
             total_functions += n_fns;
             total_types += n_types;
             symbol_index.add(result);  // Phase 17: keep compact cross-TU summaries
+            call_graph.add(result);    // Phase 18: record caller→callee edges
             for (const auto& d : local_sink.all()) sink.emit(d);
             if (result.ok) {
                 ++parsed;
@@ -316,6 +320,27 @@ static int cmd_analyze(const std::string& path,
     std::cout << "Symbol index: " << symbol_index.size() << " functions ("
               << symbol_index.definition_count() << " definitions) "
               << "resolvable across translation units\n";
+
+    // Phase 18: keep only project-internal edges, then report the busiest hub.
+    call_graph.prune_to(symbol_index);
+    {
+        const perfguardian::SymbolSummary* top = nullptr;
+        std::size_t top_callers = 0, top_files = 0;
+        for (const auto& [usr, sum] : symbol_index.all()) {
+            std::size_t c = call_graph.caller_count(usr);
+            if (c <= top_callers) continue;
+            std::unordered_set<std::string> files;
+            for (const auto& caller : call_graph.callers_of(usr))
+                if (const auto* cs = symbol_index.find(caller)) files.insert(cs->file);
+            top = &sum; top_callers = c; top_files = files.size();
+        }
+        std::cout << "Call graph: " << call_graph.edge_count()
+                  << " internal edges";
+        if (top)
+            std::cout << "; most-called: " << top->qualified_name << " ("
+                      << top_callers << " callers across " << top_files << " files)";
+        std::cout << "\n";
+    }
 
     // Loud warning only if NOTHING usable came out — otherwise "No issues found"
     // misleads the user into thinking their code was analyzed and is clean.
