@@ -17,7 +17,9 @@ struct SymbolSummary {
     int         line = 0;
     bool        is_definition = false;
     int         param_count   = 0;
-    long long   max_param_size = 0;  // largest by-value parameter (for cost rules)
+    long long   max_param_size = 0;  // largest copyable by-value parameter
+    std::string max_param_type;      // its type spelling, e.g. "Player"
+    std::string max_param_name;      // its name, for the suggested fix
 };
 
 // Merges function symbols from every translation unit into one USR-keyed view,

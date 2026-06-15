@@ -22,6 +22,7 @@
 #include "perfguardian/parse_cache.hpp"
 #include "perfguardian/symbol_index.hpp"
 #include "perfguardian/call_graph.hpp"
+#include "perfguardian/cross_tu_rules.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 
@@ -953,6 +954,77 @@ TEST(CallGraph, DeduplicatesRepeatedCalls) {
                                           {"c:@F@g", "c:@F@g"})});
     cg.add(tu);
     EXPECT_EQ(cg.edge_count(), 1u);
+}
+
+// ── Phase 19 — Cross-TU rules (PG007) ─────────────────────────────────────────
+
+namespace {
+// A defined function with one large by-value parameter (the PG007 target).
+perfguardian::FunctionDecl big_byval_fn(const std::string& usr,
+                                        const std::string& name,
+                                        const std::string& file,
+                                        long long size) {
+    auto fn = make_indexed_fn(usr, name, file, true);
+    perfguardian::ParamInfo p;
+    p.name = "b"; p.type_spelling = "Big"; p.bare_type_spelling = "Big";
+    p.type_size_bytes = size;
+    p.is_reference = false; p.is_pointer = false; p.is_rvalue_ref = false;
+    fn.params.push_back(p);
+    return fn;
+}
+
+// Build an index + pruned call graph: `callee` defined in its file, called once
+// by each of `caller_files` (one caller function per file).
+void build_hot(perfguardian::GlobalSymbolIndex& idx, perfguardian::CallGraph& cg,
+               const perfguardian::FunctionDecl& callee,
+               const std::vector<std::string>& caller_files) {
+    auto def = make_tu(callee.file, {callee});
+    idx.add(def); cg.add(def);
+    int n = 0;
+    for (const auto& f : caller_files) {
+        std::string cu = "c:@F@caller" + std::to_string(n++);
+        auto tu = make_tu(f, {caller_fn(cu, "caller()", f, {callee.usr})});
+        idx.add(tu); cg.add(tu);
+    }
+    cg.prune_to(idx);
+}
+}  // namespace
+
+TEST(CrossTuRules, PG007FiresForWidelyCalledByValue) {
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    build_hot(idx, cg, big_byval_fn("c:@F@process", "process(Big)", "big.cpp", 256),
+              {"a.cpp", "b.cpp", "c.cpp"});
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::run_cross_tu_rules(idx, cg, sink, {});
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG007");
+    EXPECT_EQ(sink.all()[0].confidence, perfguardian::Confidence::High);
+    EXPECT_NE(sink.all()[0].message.find("3 files"), std::string::npos);
+}
+
+TEST(CrossTuRules, PG007SkipsWhenCalledFromOneFile) {
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    // 3 callers but all in the same file → not a cross-file hot spot.
+    build_hot(idx, cg, big_byval_fn("c:@F@process", "process(Big)", "big.cpp", 256),
+              {"a.cpp", "a.cpp", "a.cpp"});
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::run_cross_tu_rules(idx, cg, sink, {});
+    EXPECT_TRUE(sink.empty());
+}
+
+TEST(CrossTuRules, PG007SkipsSmallParam) {
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    build_hot(idx, cg, big_byval_fn("c:@F@tiny", "tiny(int)", "t.cpp", 4),
+              {"a.cpp", "b.cpp", "c.cpp"});
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::run_cross_tu_rules(idx, cg, sink, {});
+    EXPECT_TRUE(sink.empty());
 }
 
 // ── Phase 5 — HotspotRanker ───────────────────────────────────────────────────

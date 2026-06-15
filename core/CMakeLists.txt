@@ -109,6 +109,7 @@ set(CORE_SOURCES
     src/rules/pg004.cpp                # Phase 4
     src/rules/pg005.cpp                # Phase 4
     src/rules/pg006.cpp                # Phase 4
+    src/rules/cross_tu_rules.cpp       # Phase 19 (PG007)
     src/analysis/hotspot.cpp           # Phase 5
     src/analysis/json_report.cpp       # Phase 6
     src/analysis/html_report.cpp       # Phase 7

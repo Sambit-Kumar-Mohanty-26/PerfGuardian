@@ -17,6 +17,10 @@ struct RuleConfig {
     int pg005_copy_size_threshold   = 32;
     // PG006: flag map lookup callees repeated at least this many times.
     int pg006_min_repeat_count      = 2;
+    // PG007 (cross-TU): flag a large by-value parameter only when the function
+    // is called by at least this many callers spanning at least this many files.
+    int pg007_min_callers           = 3;
+    int pg007_min_caller_files      = 2;
 };
 
 // Interface every rule must implement.

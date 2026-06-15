@@ -15,9 +15,14 @@ void GlobalSymbolIndex::add(const ParseResult& result) {
         s.is_definition  = fn.is_definition;
         s.param_count    = static_cast<int>(fn.params.size());
         for (const auto& p : fn.params) {
+            // Largest copyable by-value parameter — the unit of avoidable copy
+            // cost amplified across call sites (mirrors PG001's eligibility).
             if (!p.is_reference && !p.is_pointer && !p.is_rvalue_ref &&
-                p.type_size_bytes > s.max_param_size) {
+                !p.is_move_only && p.type_size_bytes > s.max_param_size) {
                 s.max_param_size = p.type_size_bytes;
+                s.max_param_type = p.bare_type_spelling.empty()
+                                   ? p.type_spelling : p.bare_type_spelling;
+                s.max_param_name = p.name;
             }
         }
 

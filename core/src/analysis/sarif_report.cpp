@@ -72,6 +72,11 @@ static const RuleDescriptor kRules[] = {
       "Map key looked up multiple times consecutively.",
       "Calling find/at/operator[] on the same key more than once performs "
       "redundant tree traversals. Cache the result of the first lookup." },
+    { "PG007", "hot-pass-by-value",
+      "Large by-value parameter on a function called widely across files.",
+      "A function that copies a large object by value and is called from many "
+      "sites across multiple files multiplies the copy cost program-wide. "
+      "Changing the parameter to const& fixes every call site at once." },
 };
 
 static json build_rules_array() {

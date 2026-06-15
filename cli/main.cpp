@@ -27,6 +27,7 @@
 #include "perfguardian/clang_parser.hpp"
 #include "perfguardian/symbol_index.hpp"
 #include "perfguardian/call_graph.hpp"
+#include "perfguardian/cross_tu_rules.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -50,8 +51,8 @@ static int cmd_list_rules() {
     for (const auto& r : rules) {
         std::cout << "  " << r->rule_id() << "  " << r->rule_name() << "\n";
     }
-    std::cout << "\nPlanned (Phase 5+):\n";
-    std::cout << "  (hotspot ranker, JSON/HTML/SARIF reports, .yaml config)\n";
+    std::cout << "\nWhole-program (cross-translation-unit):\n";
+    std::cout << "  PG007  hot-pass-by-value\n";
     return 0;
 }
 
@@ -341,6 +342,9 @@ static int cmd_analyze(const std::string& path,
                       << top_callers << " callers across " << top_files << " files)";
         std::cout << "\n";
     }
+
+    // Phase 19: whole-program rules over the complete index + call graph.
+    perfguardian::run_cross_tu_rules(symbol_index, call_graph, sink, rule_cfg);
 
     // Loud warning only if NOTHING usable came out — otherwise "No issues found"
     // misleads the user into thinking their code was analyzed and is clean.

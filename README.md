@@ -103,6 +103,7 @@ perfguardian --help                       Full help text
 | PG004 | `find-in-loop` | A linear `find()` / lookup performed inside a loop |
 | PG005 | `large-local-copy` | A large local variable copied where a reference would do |
 | PG006 | `repeated-map-lookup` | The same key looked up in a map more than once |
+| PG007 | `hot-pass-by-value` | A large by-value parameter on a function called widely across files (whole-program) |
 
 Run `perfguardian list-rules` for the live catalog.
 

@@ -57,9 +57,9 @@ Biggest effort.
 |---|---|---|---|
 | **17. Global symbol index** ✅ | One merged view of all functions | Capture stable USRs (`clang_getCursorUSR`) on functions, types, and call sites; `GlobalSymbolIndex` merges a compact `SymbolSummary` per USR across TUs, definitions superseding declarations | **Done.** leveldb: 1166 functions deduped to 1086 resolvable across TUs; round-trips through the cache; findings unchanged. |
 | **18. Call graph** ✅ | Know who calls whom, across files | `CallGraph` builds deduped caller→callee edges from call-site USRs; `prune_to(index)` keeps project-internal edges; `callers_of` / `callees_of` queries span files | **Done.** leveldb: 1238 internal edges; most-called `ToString()` resolved to 27 callers across 11 files. |
-| **19. Cross-TU rules** | Rules that reason globally | e.g. hot function takes a big object by value, called 1M× from three files; propagate cost through the graph | A finding impossible to produce from a single file |
+| **19. Cross-TU rules** ✅ | Rules that reason globally | **PG007 (hot-pass-by-value):** a large copyable by-value parameter on a function called by ≥N callers across ≥M files. Runs after parsing over the complete index + call graph. | **Done.** Fires on a crafted 3-file project ("called from 3 functions across 3 files — use const Big& to fix them all at once"); impossible from one file. |
 
-**Pillar C done:** at least one finding that requires whole-program reasoning.
+**Pillar C done:** ✅ PG007 produces a finding that requires whole-program reasoning (caller count + file spread from the call graph).
 
 ---
 
@@ -110,4 +110,5 @@ binary release.
 - ✅ **Phase 16 — memory bounds** (per-TU rule execution; no whole-repo `SymbolDB`) — **Pillar B complete**
 - ✅ **Phase 17 — global symbol index** (USR-keyed cross-TU symbol resolution; leveldb 1086 symbols)
 - ✅ **Phase 18 — call graph** (cross-file caller→callee edges; leveldb most-called `ToString()` = 27 callers/11 files)
-- ⏳ **Next: Phase 19 (cross-TU rules)** → completes Pillar C → cut v0.4.0
+- ✅ **Phase 19 — cross-TU rules** (PG007 hot-pass-by-value; whole-program finding) — **Pillar C complete**
+- ⏳ **Next: cut v0.4.0** (Pillars A + B + C all complete)
