@@ -102,7 +102,7 @@ perfguardian --help                       Full help text
 | `--bazel-aquery FILE` | Load compile actions from a Bazel `aquery --output=jsonproto` dump instead of `compile_commands.json` |
 | `--exec-root DIR` | Bazel execution root for resolving relative paths in `--bazel-aquery` (defaults to `<path>`) |
 | `--fix` | Rewrite source files in place, applying each finding's suggested fix (currently PG001/PG002 parameter edits, e.g. `Player p` → `const Player& p`) |
-| `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run |
+| `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run. If `FILE` doesn't exist it is seeded from this run (the run passes), so it works as a drop-in CI gate |
 
 ---
 
@@ -161,6 +161,24 @@ suppressions:
 
 To disable a rule entirely, set `enabled: false` under its ID.
 
+Configs nest: a `.perfguardian.yaml` in a subdirectory is merged with those above it,
+so a repo-wide config and per-directory overrides both apply (deeper wins for rule
+settings; suppressions from every level accumulate).
+
+### Inline suppression
+
+Silence a single finding right where it occurs, clang-tidy style:
+
+```cpp
+void render(Mesh m);                       // NOLINT            — silence all rules here
+void render(Mesh m);                       // NOLINT(PG001)     — silence one rule
+void render(Mesh m);                       // NOLINT(PG001,PG002)
+// NOLINTNEXTLINE(PG001)
+void render(Mesh m);                                            // silence the next line
+```
+
+A bare `NOLINT` (no parentheses) matches every rule.
+
 ---
 
 ## CI integration
@@ -188,12 +206,14 @@ To allow existing issues but block new ones, save a JSON report from your main b
 and diff against it:
 
 ```bash
-# On main, record the current state
-perfguardian analyze . --json baseline.json
-
-# On a PR, fail only if the PR introduces new findings
+# On a PR, fail only if the PR introduces new findings.
+# The first run auto-seeds baseline.json from the current state and passes;
+# every run after that gates on new issues only.
 perfguardian analyze . --baseline baseline.json --fail-on high
 ```
+
+(You can still pre-record a baseline explicitly with `--json baseline.json` if you
+prefer to commit it from a known-good branch.)
 
 Baseline matching is line-number-stable: a finding that merely shifts to a different
 line is treated as the same issue, not a new one.

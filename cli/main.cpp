@@ -29,6 +29,7 @@
 #include "perfguardian/call_graph.hpp"
 #include "perfguardian/cross_tu_rules.hpp"
 #include "perfguardian/autofix.hpp"
+#include "perfguardian/nolint.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -229,11 +230,12 @@ static int cmd_analyze(const std::string& path,
     }
 
     // Load config and build the rule set up front so rules can run per-TU.
+    // Phase 22: merge every .perfguardian.yaml from the project dir up to root,
+    // so a repo-level config and per-directory configs both apply.
     auto cfg_path = perfguardian::find_config(path);
-    perfguardian::PerfGuardianConfig cfg;
+    perfguardian::PerfGuardianConfig cfg = perfguardian::load_merged_config(path);
     if (!cfg_path.empty()) {
         std::cout << "Config: " << cfg_path << "\n";
-        cfg = perfguardian::load_config(cfg_path);
     }
     const auto rule_cfg = cfg.to_rule_config();
     const auto rules = cfg.filter_rules(perfguardian::make_default_rules());
@@ -382,6 +384,8 @@ static int cmd_analyze(const std::string& path,
     // Rules already ran per-TU during parsing (Phase 16); apply suppressions
     // to the collected diagnostics.
     cfg.apply_suppressions(sink);
+    // Phase 22: drop findings silenced by inline // NOLINT comments.
+    perfguardian::apply_nolint_suppressions(sink);
 
     // Phase 14: stable ordering so parallel parsing yields reproducible reports
     sink.sort();
@@ -452,13 +456,27 @@ static int cmd_analyze(const std::string& path,
     // Phase 10: baseline diff
     bool has_new_issues = false;
     if (!baseline_path.empty()) {
-        try {
-            auto baseline = perfguardian::load_baseline(baseline_path);
-            auto diff = perfguardian::diff_baseline(sink, baseline);
-            perfguardian::print_baseline_diff(diff);
-            has_new_issues = diff.new_count() > 0;
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: baseline diff failed: " << e.what() << "\n";
+        // Phase 22: baseline as the default gate. If the baseline file doesn't
+        // exist yet, seed it from this run and treat the run as clean — so the
+        // first invocation establishes the gate and later ones flag only new
+        // issues. (No diff to print on the seeding run.)
+        if (!fs::exists(baseline_path)) {
+            try {
+                perfguardian::write_json_report(baseline_path, report, sink);
+                std::cout << "\nBaseline seeded from this run: " << baseline_path
+                          << " (" << sink.count() << " issue(s) recorded)\n";
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: could not seed baseline: " << e.what() << "\n";
+            }
+        } else {
+            try {
+                auto baseline = perfguardian::load_baseline(baseline_path);
+                auto diff = perfguardian::diff_baseline(sink, baseline);
+                perfguardian::print_baseline_diff(diff);
+                has_new_issues = diff.new_count() > 0;
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: baseline diff failed: " << e.what() << "\n";
+            }
         }
     }
 

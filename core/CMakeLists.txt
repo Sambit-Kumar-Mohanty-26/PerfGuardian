@@ -114,6 +114,7 @@ set(CORE_SOURCES
     src/analysis/json_report.cpp       # Phase 6
     src/analysis/html_report.cpp       # Phase 7
     src/config/config.cpp              # Phase 8
+    src/config/nolint.cpp              # Phase 22
     src/analysis/sarif_report.cpp      # Phase 9
     src/analysis/baseline.cpp          # Phase 10
     src/analysis/parse_cache.cpp       # Phase 15

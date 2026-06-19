@@ -25,6 +25,7 @@
 #include "perfguardian/cross_tu_rules.hpp"
 #include "perfguardian/project_loader.hpp"
 #include "perfguardian/autofix.hpp"
+#include "perfguardian/nolint.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
@@ -963,6 +964,70 @@ TEST(Autofix, SkipsOutOfRange) {
     EXPECT_EQ(s.skipped, 1);
     EXPECT_EQ(read_back(path), "long f(Big b) {}\n");  // untouched
     std::filesystem::remove(path);
+}
+
+// ── Phase 22 — Inline NOLINT + hierarchical config ────────────────────────────
+
+TEST(Nolint, DirectiveParsing) {
+    using perfguardian::nolint_line_suppresses;
+    // Bare same-line NOLINT matches any rule.
+    EXPECT_TRUE (nolint_line_suppresses("foo(Big b);  // NOLINT", "PG001", false));
+    // Specific rule list.
+    EXPECT_TRUE (nolint_line_suppresses("foo();  // NOLINT(PG001)", "PG001", false));
+    EXPECT_TRUE (nolint_line_suppresses("foo();  // NOLINT(PG002, PG001)", "PG001", false));
+    EXPECT_FALSE(nolint_line_suppresses("foo();  // NOLINT(PG002)", "PG001", false));
+    // NOLINT (same-line) is not a NOLINTNEXTLINE and vice-versa.
+    EXPECT_FALSE(nolint_line_suppresses("foo();  // NOLINT", "PG001", true));
+    EXPECT_TRUE (nolint_line_suppresses("// NOLINTNEXTLINE(PG001)", "PG001", true));
+    EXPECT_FALSE(nolint_line_suppresses("// NOLINTNEXTLINE(PG001)", "PG001", false));
+    // No directive at all.
+    EXPECT_FALSE(nolint_line_suppresses("foo(Big b);", "PG001", false));
+}
+
+TEST(Nolint, SuppressesAtLineAndNextLine) {
+    namespace fs = std::filesystem;
+    fs::path p = fs::temp_directory_path() / "pg_nolint.cpp";
+    std::ofstream(p, std::ios::binary)
+        << "long a(Big x);\n"                      // 1: flagged
+        << "long b(Big x);  // NOLINT(PG001)\n"    // 2: suppressed (same line)
+        << "// NOLINTNEXTLINE(PG001)\n"            // 3
+        << "long c(Big x);\n";                     // 4: suppressed (next line)
+    const std::string file = p.string();
+
+    perfguardian::DiagnosticSink sink;
+    for (int ln : {1, 2, 4}) {
+        perfguardian::Diagnostic d;
+        d.rule_id = "PG001";
+        d.location = {file, ln, 1};
+        sink.emit(d);
+    }
+    perfguardian::apply_nolint_suppressions(sink);
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].location.line, 1);
+    fs::remove(p);
+}
+
+TEST(Config, MergesNestedDirectories) {
+    namespace fs = std::filesystem;
+    fs::path root = fs::temp_directory_path() / "pg_hier_cfg";
+    fs::remove_all(root);
+    fs::create_directories(root / "sub");
+    std::ofstream(root / ".perfguardian.yaml")
+        << "suppressions:\n  - rule: PG006\n";
+    std::ofstream(root / "sub" / ".perfguardian.yaml")
+        << "suppressions:\n  - rule: PG001\n";
+
+    auto cfg = perfguardian::load_merged_config((root / "sub").string());
+    // Both levels' suppressions accumulate.
+    ASSERT_EQ(cfg.suppressions.size(), 2u);
+    bool has001 = false, has006 = false;
+    for (const auto& s : cfg.suppressions) {
+        has001 |= (s.rule == "PG001");
+        has006 |= (s.rule == "PG006");
+    }
+    EXPECT_TRUE(has001);
+    EXPECT_TRUE(has006);
+    fs::remove_all(root);
 }
 
 // ── Phase 17 — Global symbol index ────────────────────────────────────────────

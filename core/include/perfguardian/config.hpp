@@ -54,4 +54,11 @@ PerfGuardianConfig load_config(const std::string& path);
 // Returns the path of the first file found, or empty string if none.
 std::string find_config(const std::string& start_dir);
 
+// Collect every .perfguardian.yaml from start_dir up to the filesystem root and
+// merge them, so an outer (repo-level) config and inner (per-directory) configs
+// both apply. Deeper configs win for rule overrides and schema_version;
+// suppressions from all levels accumulate. Returns a default config if none
+// exist. Throws if any found file fails to parse.
+PerfGuardianConfig load_merged_config(const std::string& start_dir);
+
 }  // namespace perfguardian

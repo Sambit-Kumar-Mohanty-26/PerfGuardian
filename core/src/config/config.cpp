@@ -1,5 +1,6 @@
 #include "perfguardian/config.hpp"
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -159,6 +160,29 @@ std::string find_config(const std::string& start_dir) {
         dir = parent;
     }
     return {};
+}
+
+PerfGuardianConfig load_merged_config(const std::string& start_dir) {
+    // Gather configs from the filesystem root down to start_dir, so deeper
+    // (more specific) configs are merged last and therefore win.
+    std::vector<fs::path> paths;
+    for (fs::path dir = fs::absolute(start_dir); ; dir = dir.parent_path()) {
+        fs::path candidate = dir / ".perfguardian.yaml";
+        if (fs::exists(candidate)) paths.push_back(candidate);
+        if (dir.parent_path() == dir) break;  // reached filesystem root
+    }
+    std::reverse(paths.begin(), paths.end());  // outermost first
+
+    PerfGuardianConfig merged;
+    for (const auto& p : paths) {
+        PerfGuardianConfig c = load_config(p.string());
+        merged.schema_version = c.schema_version;          // deepest wins
+        for (auto& [id, ov] : c.rule_overrides)
+            merged.rule_overrides[id] = ov;                // deeper overrides win
+        merged.suppressions.insert(merged.suppressions.end(),
+                                   c.suppressions.begin(), c.suppressions.end());
+    }
+    return merged;
 }
 
 }  // namespace perfguardian
