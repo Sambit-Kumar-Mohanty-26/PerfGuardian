@@ -15,6 +15,16 @@ struct CompileCommand {
 // Throws std::runtime_error on failure.
 std::vector<CompileCommand> load_compile_commands(const std::string& build_dir);
 
+// Load compile commands from a Bazel `aquery --output=jsonproto` dump (a file
+// produced by e.g. `bazel aquery 'mnemonic("CppCompile", //...)'
+// --output=jsonproto > actions.json`). Each C++ compile action becomes one
+// CompileCommand: its argument list verbatim, the first source-file argument as
+// `file`, and `exec_root` as `directory` so relative paths resolve. Actions
+// whose command line is hidden behind a param file are skipped (documented
+// limitation). Throws std::runtime_error on parse failure.
+std::vector<CompileCommand> load_bazel_aquery(const std::string& aquery_json_path,
+                                              const std::string& exec_root = "");
+
 // Walk a source tree to collect .cpp/.cc/.cxx files when
 // compile_commands.json is not available (fallback mode).
 std::vector<std::string> enumerate_sources(const std::string& source_dir);

@@ -23,8 +23,10 @@
 #include "perfguardian/symbol_index.hpp"
 #include "perfguardian/call_graph.hpp"
 #include "perfguardian/cross_tu_rules.hpp"
+#include "perfguardian/project_loader.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
+#include <fstream>
 
 // Version header
 
@@ -839,6 +841,62 @@ TEST(ParseCache, StoreLoadRoundTrip) {
     EXPECT_TRUE(loaded->functions[0].params[0].is_move_only);
 
     fs::remove_all(dir);
+}
+
+// ── Phase 20 — Bazel aquery adapter ───────────────────────────────────────────
+
+namespace {
+std::string write_temp_aquery(const std::string& name, const std::string& json) {
+    namespace fs = std::filesystem;
+    fs::path p = fs::temp_directory_path() / name;
+    std::ofstream(p) << json;
+    return p.string();
+}
+}  // namespace
+
+TEST(BazelAquery, ExtractsCppCompileActions) {
+    // Two CppCompile actions + a link action; only the compiles are commands,
+    // and the source file is the first source-looking argument.
+    const std::string j = R"({
+      "actions": [
+        { "mnemonic": "CppCompile",
+          "arguments": ["/usr/bin/g++", "-std=c++20", "-Iinclude", "-c", "src/a.cc", "-o", "a.o"] },
+        { "mnemonic": "CppLink",
+          "arguments": ["/usr/bin/g++", "a.o", "-o", "bin"] },
+        { "mnemonic": "CppCompile",
+          "arguments": ["/usr/bin/clang++", "-c", "src/b.cpp"] }
+      ]
+    })";
+    auto path = write_temp_aquery("pg_aq_ok.json", j);
+    auto cmds = perfguardian::load_bazel_aquery(path, "/exec");
+
+    ASSERT_EQ(cmds.size(), 2u);
+    EXPECT_NE(cmds[0].file.find("a.cc"), std::string::npos);
+    EXPECT_EQ(cmds[0].directory, "/exec");
+    EXPECT_EQ(cmds[0].arguments.front(), "/usr/bin/g++");
+    EXPECT_NE(cmds[1].file.find("b.cpp"), std::string::npos);
+    std::filesystem::remove(path);
+}
+
+TEST(BazelAquery, SkipsActionsWithoutSourceOrArgs) {
+    // A CppCompile with no source argument and one with no arguments → skipped.
+    const std::string j = R"({
+      "actions": [
+        { "mnemonic": "CppCompile", "arguments": ["/usr/bin/g++", "-c", "-o", "x.o"] },
+        { "mnemonic": "CppCompile" }
+      ]
+    })";
+    auto path = write_temp_aquery("pg_aq_skip.json", j);
+    auto cmds = perfguardian::load_bazel_aquery(path, "");
+    EXPECT_TRUE(cmds.empty());
+    std::filesystem::remove(path);
+}
+
+TEST(BazelAquery, ThrowsOnNonJsonproto) {
+    // Missing "actions" array (e.g. someone piped the default text output).
+    auto path = write_temp_aquery("pg_aq_bad.json", R"({"note": "wrong format"})");
+    EXPECT_THROW(perfguardian::load_bazel_aquery(path, ""), std::runtime_error);
+    std::filesystem::remove(path);
 }
 
 // ── Phase 17 — Global symbol index ────────────────────────────────────────────

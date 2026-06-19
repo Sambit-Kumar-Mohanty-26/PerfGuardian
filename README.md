@@ -66,6 +66,16 @@ with `cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ...`, or point the tool at a dire
 that contains it. Without a compilation database it falls back to scanning `.cpp`/`.hpp`
 files directly.
 
+**Bazel projects** have no `compile_commands.json`. Feed the build graph directly:
+
+```bash
+bazel aquery 'mnemonic("CppCompile", //...)' --output=jsonproto > actions.json
+perfguardian analyze . --bazel-aquery actions.json --exec-root "$(bazel info execution_root)"
+```
+
+Each `CppCompile` action becomes a translation unit. (Toolchains that route the
+command line through a param file instead of inlining it are skipped, with a warning.)
+
 ---
 
 ## Usage
@@ -89,6 +99,8 @@ perfguardian --help                       Full help text
 | `--fail-on SEVERITY` | Exit non-zero if any issue at or above `SEVERITY` is found (`low`, `medium`, `high`, `critical`) |
 | `--min-confidence LEVEL` | Only report findings at or above `LEVEL` (`low`, `medium`, `high`); gate CI to clear-cut findings |
 | `--cache-dir DIR` | Cache parsed files in `DIR`; unchanged files are reused on the next run (large repos re-scan near-instantly) |
+| `--bazel-aquery FILE` | Load compile actions from a Bazel `aquery --output=jsonproto` dump instead of `compile_commands.json` |
+| `--exec-root DIR` | Bazel execution root for resolving relative paths in `--bazel-aquery` (defaults to `<path>`) |
 | `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run |
 
 ---

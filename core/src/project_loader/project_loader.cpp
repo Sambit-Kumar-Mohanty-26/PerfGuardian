@@ -172,6 +172,75 @@ std::vector<std::string> sanitize_compile_args(const CompileCommand& cmd) {
     return out;
 }
 
+std::vector<CompileCommand> load_bazel_aquery(const std::string& aquery_json_path,
+                                              const std::string& exec_root) {
+    fs::path path(aquery_json_path);
+    if (!fs::exists(path)) {
+        throw std::runtime_error("Bazel aquery file not found: " + aquery_json_path);
+    }
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open: " + path.string());
+    }
+
+    json j;
+    try {
+        file >> j;
+    } catch (const json::exception& e) {
+        throw std::runtime_error(std::string("aquery JSON parse error: ") + e.what());
+    }
+
+    if (!j.contains("actions") || !j["actions"].is_array()) {
+        throw std::runtime_error(
+            "aquery JSON has no 'actions' array — use `--output=jsonproto` "
+            "(jsonproto, not the default text output)");
+    }
+
+    std::vector<CompileCommand> result;
+    std::size_t skipped = 0;
+
+    for (const auto& action : j["actions"]) {
+        // C++ compile actions only; templates expand to per-source CppCompile.
+        const std::string mnemonic = action.value("mnemonic", "");
+        if (mnemonic.rfind("CppCompile", 0) != 0) continue;
+
+        // jsonproto inlines the command line in "arguments" unless the toolchain
+        // routes it through a param file, in which case it isn't recoverable here.
+        if (!action.contains("arguments") || !action["arguments"].is_array() ||
+            action["arguments"].empty()) {
+            ++skipped;
+            continue;
+        }
+
+        CompileCommand cmd;
+        cmd.directory = exec_root;
+        for (const auto& arg : action["arguments"]) {
+            cmd.arguments.push_back(arg.get<std::string>());
+        }
+
+        // The first source-looking token is the translation unit, resolved
+        // against the exec root so the rest of the pipeline can find it.
+        for (const auto& a : cmd.arguments) {
+            if (is_source_path(a)) {
+                cmd.file = resolve_dir(exec_root, a);
+                break;
+            }
+        }
+
+        if (cmd.file.empty()) { ++skipped; continue; }
+        result.push_back(std::move(cmd));
+    }
+
+    spdlog::debug("Bazel aquery: {} compile actions ({} skipped) from {}",
+                  result.size(), skipped, path.string());
+    if (skipped > 0) {
+        spdlog::warn("Bazel aquery: skipped {} compile action(s) with no inline "
+                     "command line (param-file toolchain)", skipped);
+    }
+    return result;
+}
+
 std::vector<std::string> infer_include_dirs(const std::string& source_dir) {
     static const std::set<std::string> hdr_exts = {
         ".h", ".hpp", ".hh", ".hxx", ".h++", ".inl"

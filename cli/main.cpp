@@ -150,7 +150,9 @@ static int cmd_analyze(const std::string& path,
                        const std::string& fail_on,
                        const std::string& baseline_path,
                        const std::string& min_confidence,
-                       const std::string& cache_dir) {
+                       const std::string& cache_dir,
+                       const std::string& bazel_aquery,
+                       const std::string& exec_root) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -165,11 +167,26 @@ static int cmd_analyze(const std::string& path,
 
     bool has_compile_commands = false;
     try {
-        compile_commands = perfguardian::load_compile_commands(path);
+        if (!bazel_aquery.empty()) {
+            // Bazel build graph: resolve relative paths against the exec root,
+            // defaulting to the project path when one isn't supplied.
+            const std::string root = exec_root.empty() ? path : exec_root;
+            compile_commands = perfguardian::load_bazel_aquery(bazel_aquery, root);
+            std::cout << "Loaded Bazel aquery: "
+                      << compile_commands.size() << " compile actions\n";
+        } else {
+            compile_commands = perfguardian::load_compile_commands(path);
+            std::cout << "Loaded compile_commands.json: "
+                      << compile_commands.size() << " translation units\n";
+        }
         has_compile_commands = true;
-        std::cout << "Loaded compile_commands.json: "
-                  << compile_commands.size() << " translation units\n";
-    } catch (...) {
+    } catch (const std::exception& e) {
+        if (!bazel_aquery.empty()) {
+            // An explicit --bazel-aquery that fails is a hard error, not a
+            // silent fall-through to a folder scan.
+            std::cerr << "Bazel aquery load failed: " << e.what() << "\n";
+            return 1;
+        }
         sources = perfguardian::enumerate_sources(path);
         std::cout << "No compile_commands.json — found "
                   << sources.size() << " source files\n";
@@ -478,6 +495,7 @@ int main(int argc, char** argv) {
     auto* analyze_cmd = app.add_subcommand("analyze", "Analyze a C++ project for performance issues");
     std::string analyze_path = ".";
     std::string json_out, html_out, sarif_out, fail_on, baseline, min_confidence, cache_dir;
+    std::string bazel_aquery, exec_root;
 
     analyze_cmd->add_option("path", analyze_path, "Project directory to analyze")->default_val(".");
     analyze_cmd->add_option("--json",     json_out,  "Write JSON report to FILE");
@@ -489,6 +507,12 @@ int main(int argc, char** argv) {
                             "Only report findings at or above CONFIDENCE (low|medium|high)");
     analyze_cmd->add_option("--cache-dir", cache_dir,
                             "Cache parsed files in DIR; unchanged files are reused on the next run");
+    analyze_cmd->add_option("--bazel-aquery", bazel_aquery,
+                            "Load compile actions from a Bazel `aquery --output=jsonproto` dump "
+                            "instead of compile_commands.json");
+    analyze_cmd->add_option("--exec-root", exec_root,
+                            "Bazel execution root used to resolve relative paths in --bazel-aquery "
+                            "(defaults to the project path)");
 
     // list-rules 
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
@@ -503,7 +527,7 @@ int main(int argc, char** argv) {
 
     if (*analyze_cmd) {
         return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on,
-                           baseline, min_confidence, cache_dir);
+                           baseline, min_confidence, cache_dir, bazel_aquery, exec_root);
     }
     if (*list_rules_cmd) {
         return cmd_list_rules();

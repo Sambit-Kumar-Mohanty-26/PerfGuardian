@@ -69,7 +69,7 @@ Makes it deployable across an organization, not just runnable.
 
 | Phase | Goal | Key work |
 |---|---|---|
-| **20. Build-graph input** | Work without `compile_commands.json` | Adapter that extracts compile actions from Bazel `aquery` |
+| **20. Build-graph input** ✅ | Work without `compile_commands.json` | `load_bazel_aquery` parses a `aquery --output=jsonproto` dump, turning each `CppCompile` action into a `CompileCommand` (reusing the existing sanitize pipeline); `--bazel-aquery` / `--exec-root` CLI flags |
 | **21. Autofix** | Apply suggested edits | Emit clang-style fixits; `--fix` writes them |
 | **22. Suppression at scale** | Manage findings across a big repo | Inline `// NOLINT(PG002)`, per-directory configs, baseline as the default gate |
 | **23. Distributed sharding** | Truly large-scale | Shard TUs across machines, merge symbol indexes |
@@ -111,4 +111,5 @@ binary release.
 - ✅ **Phase 17 — global symbol index** (USR-keyed cross-TU symbol resolution; leveldb 1086 symbols)
 - ✅ **Phase 18 — call graph** (cross-file caller→callee edges; leveldb most-called `ToString()` = 27 callers/11 files)
 - ✅ **Phase 19 — cross-TU rules** (PG007 hot-pass-by-value; whole-program finding) — **Pillar C complete**
-- ⏳ **Next: cut v0.4.0** (Pillars A + B + C all complete)
+- ✅ **Phase 20 — build-graph input** (Bazel `aquery` adapter; `--bazel-aquery` / `--exec-root`) — Pillar D begun
+- ⏳ **Next: Phase 21 (autofix)**
