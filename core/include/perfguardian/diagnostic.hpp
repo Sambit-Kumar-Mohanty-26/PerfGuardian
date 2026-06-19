@@ -15,6 +15,15 @@ struct Location {
     int column = 0;
 };
 
+// A machine-applicable edit: replace the source span [start, end) with `text`.
+// Columns are 1-based; `end_col` is one past the last character (half-open).
+struct FixIt {
+    int start_line = 0, start_col = 0;
+    int end_line   = 0, end_col   = 0;
+    std::string replacement;
+    bool valid() const { return start_line > 0 && start_line == end_line && start_col < end_col; }
+};
+
 // Quantitative metrics attached to a diagnostic.
 // All values are optional; rules fill only what they can measure.
 struct Metrics {
@@ -38,6 +47,7 @@ struct Diagnostic {
     std::string code_snippet;     // source context (optional)
     Metrics     metrics;
     bool        suppressed = false;
+    std::vector<FixIt> fixits;    // machine-applicable edits (Phase 21, --fix)
 };
 
 // Collects diagnostics emitted by rules during analysis.

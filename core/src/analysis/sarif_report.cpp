@@ -124,9 +124,26 @@ std::string to_sarif_string(const AnalysisReport& /*report*/,
         };
 
         if (!d.suggested_fix.empty()) {
-            result_obj["fixes"] = json::array({
-                { { "description", { { "text", d.suggested_fix } } } }
-            });
+            json fix = { { "description", { { "text", d.suggested_fix } } } };
+            // Attach a machine-applicable edit when a precise span is known.
+            const FixIt* fx = nullptr;
+            for (const auto& f : d.fixits) if (f.valid()) { fx = &f; break; }
+            if (fx) {
+                fix["artifactChanges"] = json::array({{
+                    { "artifactLocation", {
+                        { "uri", uri },
+                        { "uriBaseId", repo_root.empty() ? "" : "%SRCROOT%" }
+                    }},
+                    { "replacements", json::array({{
+                        { "deletedRegion", {
+                            { "startLine",   fx->start_line }, { "startColumn", fx->start_col },
+                            { "endLine",     fx->end_line   }, { "endColumn",   fx->end_col   }
+                        }},
+                        { "insertedContent", { { "text", fx->replacement } } }
+                    }}) }
+                }});
+            }
+            result_obj["fixes"] = json::array({ fix });
         }
 
         results.push_back(std::move(result_obj));

@@ -24,9 +24,11 @@
 #include "perfguardian/call_graph.hpp"
 #include "perfguardian/cross_tu_rules.hpp"
 #include "perfguardian/project_loader.hpp"
+#include "perfguardian/autofix.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 // Version header
 
@@ -896,6 +898,70 @@ TEST(BazelAquery, ThrowsOnNonJsonproto) {
     // Missing "actions" array (e.g. someone piped the default text output).
     auto path = write_temp_aquery("pg_aq_bad.json", R"({"note": "wrong format"})");
     EXPECT_THROW(perfguardian::load_bazel_aquery(path, ""), std::runtime_error);
+    std::filesystem::remove(path);
+}
+
+// ── Phase 21 — Autofix ────────────────────────────────────────────────────────
+
+namespace {
+std::string write_temp_src(const std::string& name, const std::string& body) {
+    namespace fs = std::filesystem;
+    fs::path p = fs::temp_directory_path() / name;
+    std::ofstream(p, std::ios::binary) << body;
+    return p.string();
+}
+std::string read_back(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream ss; ss << in.rdbuf();
+    return ss.str();
+}
+perfguardian::Diagnostic diag_with_fix(const std::string& file, perfguardian::FixIt fx) {
+    perfguardian::Diagnostic d;
+    d.rule_id = "PG001";
+    d.location = {file, fx.start_line, fx.start_col};
+    d.fixits.push_back(fx);
+    return d;
+}
+}  // namespace
+
+TEST(Autofix, ReplacesSpan) {
+    // "long f(Big b)" → replace "Big b" (cols 8..15) with "const Big& b".
+    auto path = write_temp_src("pg_fix_one.cpp", "long f(Big b) { return 0; }\n");
+    auto d = diag_with_fix(path, {1, 8, 1, 13, "const Big& b"});
+    auto s = perfguardian::apply_fixits({d});
+    EXPECT_EQ(s.applied, 1);
+    EXPECT_EQ(read_back(path), "long f(const Big& b) { return 0; }\n");
+    std::filesystem::remove(path);
+}
+
+TEST(Autofix, MultipleEditsSameLineKeepPositions) {
+    // Two params on one line; applying the later one first must not shift the first.
+    auto path = write_temp_src("pg_fix_two.cpp", "int g(Big a, Big c) { return 0; }\n");
+    auto d1 = diag_with_fix(path, {1, 7, 1, 12, "const Big& a"});   // "Big a"
+    auto d2 = diag_with_fix(path, {1, 14, 1, 19, "const Big& c"});  // "Big c"
+    auto s = perfguardian::apply_fixits({d1, d2});
+    EXPECT_EQ(s.applied, 2);
+    EXPECT_EQ(read_back(path), "int g(const Big& a, const Big& c) { return 0; }\n");
+    std::filesystem::remove(path);
+}
+
+TEST(Autofix, SkipsOverlappingEdits) {
+    auto path = write_temp_src("pg_fix_overlap.cpp", "long f(Big b) {}\n");
+    auto a = diag_with_fix(path, {1, 8, 1, 13, "const Big& b"});
+    auto b = diag_with_fix(path, {1, 8, 1, 11, "XXX"});  // overlaps the first span
+    auto s = perfguardian::apply_fixits({a, b});
+    EXPECT_EQ(s.applied, 1);
+    EXPECT_EQ(s.skipped, 1);
+    std::filesystem::remove(path);
+}
+
+TEST(Autofix, SkipsOutOfRange) {
+    auto path = write_temp_src("pg_fix_oor.cpp", "long f(Big b) {}\n");
+    auto d = diag_with_fix(path, {99, 1, 99, 5, "nope"});  // no such line
+    auto s = perfguardian::apply_fixits({d});
+    EXPECT_EQ(s.applied, 0);
+    EXPECT_EQ(s.skipped, 1);
+    EXPECT_EQ(read_back(path), "long f(Big b) {}\n");  // untouched
     std::filesystem::remove(path);
 }
 

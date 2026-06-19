@@ -140,6 +140,14 @@ static ParamInfo make_param_info(CXCursor param_cursor) {
     p.is_move_only = spelling_is_move_only(p.type_spelling) ||
                      type_has_deleted_copy(canonical);
 
+    // Source span of the whole parameter declaration, for precise autofix.
+    CXSourceRange extent = clang_getCursorExtent(param_cursor);
+    unsigned sl, sc, el, ec;
+    clang_getSpellingLocation(clang_getRangeStart(extent), nullptr, &sl, &sc, nullptr);
+    clang_getSpellingLocation(clang_getRangeEnd(extent),   nullptr, &el, &ec, nullptr);
+    p.line = static_cast<int>(sl); p.col = static_cast<int>(sc);
+    p.end_line = static_cast<int>(el); p.end_col = static_cast<int>(ec);
+
     return p;
 }
 

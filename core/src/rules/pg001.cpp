@@ -45,6 +45,12 @@ void RulePG001::run(const SymbolDB& db, DiagnosticSink& sink,
             d.metrics.type_size_bytes = sz;
             d.metrics.copy_cost_bytes = sz;
 
+            // Machine-applicable fix: replace the whole parameter declaration.
+            if (param.line > 0 && param.line == param.end_line) {
+                d.fixits.push_back({param.line, param.col, param.end_line,
+                                    param.end_col, d.suggested_fix});
+            }
+
             sink.emit(std::move(d));
         }
     }

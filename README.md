@@ -101,6 +101,7 @@ perfguardian --help                       Full help text
 | `--cache-dir DIR` | Cache parsed files in `DIR`; unchanged files are reused on the next run (large repos re-scan near-instantly) |
 | `--bazel-aquery FILE` | Load compile actions from a Bazel `aquery --output=jsonproto` dump instead of `compile_commands.json` |
 | `--exec-root DIR` | Bazel execution root for resolving relative paths in `--bazel-aquery` (defaults to `<path>`) |
+| `--fix` | Rewrite source files in place, applying each finding's suggested fix (currently PG001/PG002 parameter edits, e.g. `Player p` → `const Player& p`) |
 | `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run |
 
 ---

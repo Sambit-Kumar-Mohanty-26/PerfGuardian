@@ -12,9 +12,11 @@ using json = nlohmann::json;
 namespace perfguardian {
 
 // JSON (de)serialization for the parse structures, used by the on-disk cache.
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ParamInfo, name, type_spelling,
+// WITH_DEFAULT so caches written before the autofix span fields load cleanly
+// (the missing span fields default to 0 → "no fixit", which is correct).
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ParamInfo, name, type_spelling,
     bare_type_spelling, type_size_bytes, is_reference, is_pointer, is_const,
-    is_rvalue_ref, is_mutated, is_move_only)
+    is_rvalue_ref, is_mutated, is_move_only, line, col, end_line, end_col)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CallSite, callee, callee_usr, lookup_target,
     inside_loop, loop_depth, file, line)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LocalVar, name, type_spelling,

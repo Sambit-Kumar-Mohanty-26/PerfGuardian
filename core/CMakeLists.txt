@@ -119,6 +119,7 @@ set(CORE_SOURCES
     src/analysis/parse_cache.cpp       # Phase 15
     src/analysis/symbol_index.cpp      # Phase 17
     src/analysis/call_graph.cpp        # Phase 18
+    src/analysis/autofix.cpp           # Phase 21
 )
 
 if(PERFGUARDIAN_ENABLE_CLANG)

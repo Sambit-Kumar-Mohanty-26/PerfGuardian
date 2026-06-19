@@ -28,6 +28,7 @@
 #include "perfguardian/symbol_index.hpp"
 #include "perfguardian/call_graph.hpp"
 #include "perfguardian/cross_tu_rules.hpp"
+#include "perfguardian/autofix.hpp"
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -152,7 +153,8 @@ static int cmd_analyze(const std::string& path,
                        const std::string& min_confidence,
                        const std::string& cache_dir,
                        const std::string& bazel_aquery,
-                       const std::string& exec_root) {
+                       const std::string& exec_root,
+                       bool apply_fix) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -432,6 +434,21 @@ static int cmd_analyze(const std::string& path,
         }
     }
 
+    // Phase 21: apply machine-applicable fixes to source files on disk. Runs
+    // after reports are written, so the reports describe the original findings.
+    if (apply_fix) {
+        auto fx = perfguardian::apply_fixits(sink.all());
+        if (fx.applied > 0) {
+            std::cout << "\nAutofix: applied " << fx.applied << " edit(s) across "
+                      << fx.files.size() << " file(s)";
+            if (fx.skipped > 0) std::cout << " (" << fx.skipped << " skipped)";
+            std::cout << "\n";
+        } else {
+            std::cout << "\nAutofix: no applicable fixes "
+                      << (fx.skipped > 0 ? "(all candidates skipped)" : "found") << "\n";
+        }
+    }
+
     // Phase 10: baseline diff
     bool has_new_issues = false;
     if (!baseline_path.empty()) {
@@ -496,6 +513,7 @@ int main(int argc, char** argv) {
     std::string analyze_path = ".";
     std::string json_out, html_out, sarif_out, fail_on, baseline, min_confidence, cache_dir;
     std::string bazel_aquery, exec_root;
+    bool apply_fix = false;
 
     analyze_cmd->add_option("path", analyze_path, "Project directory to analyze")->default_val(".");
     analyze_cmd->add_option("--json",     json_out,  "Write JSON report to FILE");
@@ -513,6 +531,8 @@ int main(int argc, char** argv) {
     analyze_cmd->add_option("--exec-root", exec_root,
                             "Bazel execution root used to resolve relative paths in --bazel-aquery "
                             "(defaults to the project path)");
+    analyze_cmd->add_flag("--fix", apply_fix,
+                          "Rewrite source files in place, applying each finding's suggested fix");
 
     // list-rules 
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
@@ -527,7 +547,8 @@ int main(int argc, char** argv) {
 
     if (*analyze_cmd) {
         return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on,
-                           baseline, min_confidence, cache_dir, bazel_aquery, exec_root);
+                           baseline, min_confidence, cache_dir, bazel_aquery, exec_root,
+                           apply_fix);
     }
     if (*list_rules_cmd) {
         return cmd_list_rules();

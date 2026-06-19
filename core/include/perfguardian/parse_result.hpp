@@ -19,6 +19,12 @@ struct ParamInfo {
                                     // also set when captured by a reference member
     bool        is_move_only = false; // type can't be copied (unique_ptr, mutex,
                                       // atomic, …) — by-value is the sink idiom
+    // Source span of the parameter declaration (e.g. "Player p"), 1-based, for
+    // precise autofix. All zero when the parser couldn't resolve a span.
+    int         line     = 0;
+    int         col      = 0;        // start column
+    int         end_line = 0;
+    int         end_col  = 0;        // one past the last character
 };
 
 // A call expression captured inside a function body (Phase 4)
