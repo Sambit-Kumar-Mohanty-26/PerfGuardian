@@ -19,6 +19,15 @@ void CallGraph::add(const ParseResult& result) {
     }
 }
 
+std::vector<std::pair<std::string, std::string>> CallGraph::edges() const {
+    std::vector<std::pair<std::string, std::string>> out;
+    out.reserve(edge_count_);
+    for (const auto& [caller, callees] : callees_)
+        for (const auto& callee : callees) out.emplace_back(caller, callee);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 void CallGraph::prune_to(const GlobalSymbolIndex& index) {
     std::size_t edges = 0;
     for (auto it = callers_.begin(); it != callers_.end();) {

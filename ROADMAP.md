@@ -72,7 +72,9 @@ Makes it deployable across an organization, not just runnable.
 | **20. Build-graph input** ✅ | Work without `compile_commands.json` | `load_bazel_aquery` parses a `aquery --output=jsonproto` dump, turning each `CppCompile` action into a `CompileCommand` (reusing the existing sanitize pipeline); `--bazel-aquery` / `--exec-root` CLI flags |
 | **21. Autofix** ✅ | Apply suggested edits | Parameter source spans captured in the visitor → `FixIt` on PG001/PG002 findings; `apply_fixits` rewrites files (highest-offset-first, overlap-safe); `--fix` flag; SARIF emits machine-applicable `artifactChanges` |
 | **22. Suppression at scale** ✅ | Manage findings across a big repo | Inline `// NOLINT` / `NOLINTNEXTLINE` (bare or `(PG001,PG002)`); `load_merged_config` merges every `.perfguardian.yaml` from root down (deeper wins, suppressions accumulate); `--baseline` auto-seeds when missing so it works as the default gate |
-| **23. Distributed sharding** | Truly large-scale | Shard TUs across machines, merge symbol indexes |
+| **23. Distributed sharding** ✅ | Truly large-scale | `--shard K/N` analyzes a deterministic TU subset and `--shard-out` writes a partial artifact (findings + symbols + unpruned edges); the `merge` subcommand unions them, prunes, and runs cross-TU rules — no compiler needed at merge |
+
+**Pillar D done:** ✅ Bazel input, autofix, scale-out suppression, and distributed sharding all landed. leveldb sharded 3 ways then merged → 1086 symbols, 1238 edges, 69 findings — identical to the monolithic run.
 
 ---
 
@@ -114,4 +116,5 @@ binary release.
 - ✅ **Phase 20 — build-graph input** (Bazel `aquery` adapter; `--bazel-aquery` / `--exec-root`) — Pillar D begun
 - ✅ **Phase 21 — autofix** (`--fix` rewrites PG001/PG002 params in place; SARIF machine-applicable fixes)
 - ✅ **Phase 22 — suppression at scale** (inline NOLINT, hierarchical configs, baseline auto-seed gate)
-- ⏳ **Next: Phase 23 (distributed sharding)** — the last Pillar D phase
+- ✅ **Phase 23 — distributed sharding** (`--shard K/N` + `merge`; leveldb 3-way shard == monolithic run) — **Pillar D complete**
+- 🎉 **All 24 phases (0–23) complete — entire roadmap done.**

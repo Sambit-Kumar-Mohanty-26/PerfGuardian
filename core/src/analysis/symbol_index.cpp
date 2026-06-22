@@ -35,6 +35,16 @@ void GlobalSymbolIndex::add(const ParseResult& result) {
     }
 }
 
+void GlobalSymbolIndex::merge(const SymbolSummary& s) {
+    if (s.usr.empty()) return;
+    auto it = by_usr_.find(s.usr);
+    if (it == by_usr_.end()) {
+        by_usr_.emplace(s.usr, s);
+    } else if (s.is_definition && !it->second.is_definition) {
+        it->second = s;  // a definition supersedes a declaration
+    }
+}
+
 const SymbolSummary* GlobalSymbolIndex::find(const std::string& usr) const {
     auto it = by_usr_.find(usr);
     return it == by_usr_.end() ? nullptr : &it->second;

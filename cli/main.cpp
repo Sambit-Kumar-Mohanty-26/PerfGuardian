@@ -30,6 +30,8 @@
 #include "perfguardian/cross_tu_rules.hpp"
 #include "perfguardian/autofix.hpp"
 #include "perfguardian/nolint.hpp"
+#include "perfguardian/shard.hpp"
+#include <algorithm>
 
 #ifdef PERFGUARDIAN_CLANG_ENABLED
 #include "perfguardian/clang_parser.hpp"
@@ -155,7 +157,10 @@ static int cmd_analyze(const std::string& path,
                        const std::string& cache_dir,
                        const std::string& bazel_aquery,
                        const std::string& exec_root,
-                       bool apply_fix) {
+                       bool apply_fix,
+                       int shard_index,
+                       int shard_count,
+                       const std::string& shard_out) {
     spdlog::info("PerfGuardian {} — starting analysis", perfguardian::version_str);
     std::cout << "PerfGuardian " << perfguardian::version_str << "\n";
 
@@ -227,6 +232,20 @@ static int cmd_analyze(const std::string& path,
             args = fallback_args;
         }
         work.push_back({src, std::move(args)});
+    }
+
+    // Phase 23: for distributed runs, keep only this shard's translation units.
+    // Sort first so the round-robin partition is identical on every machine.
+    if (shard_count > 1) {
+        std::sort(work.begin(), work.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<std::pair<std::string, std::vector<std::string>>> mine;
+        for (std::size_t i = 0; i < work.size(); ++i)
+            if (perfguardian::tu_in_shard(i, shard_index, shard_count))
+                mine.push_back(std::move(work[i]));
+        std::cout << "Shard " << shard_index << "/" << shard_count << ": "
+                  << mine.size() << " of " << work.size() << " translation units\n";
+        work = std::move(mine);
     }
 
     // Load config and build the rule set up front so rules can run per-TU.
@@ -342,6 +361,29 @@ static int cmd_analyze(const std::string& path,
     std::cout << "Symbol index: " << symbol_index.size() << " functions ("
               << symbol_index.definition_count() << " definitions) "
               << "resolvable across translation units\n";
+
+    // Phase 23: in shard mode, emit this shard's partial artifact and stop —
+    // cross-TU rules and the final report run at merge time over all shards.
+    // Edges are written *unpruned* so the merge can resolve callees defined in
+    // other shards before pruning against the combined index.
+    if (!shard_out.empty()) {
+        perfguardian::ShardArtifact art;
+        art.shard_index = shard_index;
+        art.shard_count = shard_count;
+        art.findings = sink.all();
+        for (const auto& [usr, sum] : symbol_index.all()) art.symbols.push_back(sum);
+        art.edges = call_graph.edges();
+        try {
+            perfguardian::write_shard(shard_out, art);
+            std::cout << "Shard artifact written to: " << shard_out << "  ("
+                      << art.findings.size() << " findings, " << art.symbols.size()
+                      << " symbols, " << art.edges.size() << " edges)\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to write shard artifact: " << e.what() << "\n";
+            return 1;
+        }
+        return 0;
+    }
 
     // Phase 18: keep only project-internal edges, then report the busiest hub.
     call_graph.prune_to(symbol_index);
@@ -518,6 +560,86 @@ static int cmd_analyze(const std::string& path,
     return 0;
 }
 
+// merge (Phase 23): reconstruct the whole-program view from shard artifacts.
+// This step needs no compiler — it only combines JSON and runs cross-TU rules.
+static int cmd_merge(const std::vector<std::string>& inputs,
+                     const std::string& sarif_out,
+                     const std::string& json_out,
+                     const std::string& fail_on,
+                     const std::string& min_confidence) {
+    std::cout << "PerfGuardian " << perfguardian::version_str << " — merging "
+              << inputs.size() << " shard artifact(s)\n";
+
+    perfguardian::DiagnosticSink sink;
+    perfguardian::GlobalSymbolIndex symbol_index;
+    perfguardian::CallGraph call_graph;
+
+    for (const auto& path : inputs) {
+        perfguardian::ShardArtifact art;
+        try {
+            art = perfguardian::read_shard(path);
+        } catch (const std::exception& e) {
+            std::cerr << "merge: " << e.what() << "\n";
+            return 1;
+        }
+        for (const auto& d : art.findings) sink.emit(d);
+        for (const auto& s : art.symbols) symbol_index.merge(s);
+        for (const auto& [caller, callee] : art.edges) call_graph.add_edge(caller, callee);
+    }
+
+    // Whole-program view restored: prune to project-internal edges and run the
+    // cross-TU rules that no single shard could have produced.
+    call_graph.prune_to(symbol_index);
+    perfguardian::run_cross_tu_rules(symbol_index, call_graph, sink, {});
+
+    std::cout << "Merged: " << symbol_index.size() << " symbols, "
+              << call_graph.edge_count() << " internal edges\n";
+
+    sink.sort();
+    if (!min_confidence.empty()) {
+        try {
+            auto mc = perfguardian::confidence_from_string(min_confidence);
+            sink.remove_if([&](const perfguardian::Diagnostic& d) {
+                return perfguardian::confidence_weight(d.confidence) <
+                       perfguardian::confidence_weight(mc);
+            });
+        } catch (...) {
+            std::cerr << "Unknown confidence '" << min_confidence << "'\n";
+            return 2;
+        }
+    }
+
+    auto report = perfguardian::rank_hotspots(sink);
+    perfguardian::print_report(report, perfguardian::SymbolDB{});
+
+    if (!json_out.empty()) {
+        try { perfguardian::write_json_report(json_out, report, sink);
+              std::cout << "\nJSON report written to: " << json_out << "\n"; }
+        catch (const std::exception& e) { std::cerr << "Warning: " << e.what() << "\n"; }
+    }
+    if (!sarif_out.empty()) {
+        try { perfguardian::write_sarif_report(sarif_out, report, sink, "");
+              std::cout << "SARIF report written to: " << sarif_out << "\n"; }
+        catch (const std::exception& e) { std::cerr << "Warning: " << e.what() << "\n"; }
+    }
+
+    if (!fail_on.empty() && !sink.empty()) {
+        try {
+            auto threshold = perfguardian::severity_from_string(fail_on);
+            for (const auto& d : sink.all())
+                if (perfguardian::severity_weight(d.severity) >=
+                    perfguardian::severity_weight(threshold)) {
+                    std::cout << "\nFailing: issue at or above '" << fail_on << "'.\n";
+                    return 1;
+                }
+        } catch (...) {
+            std::cerr << "Unknown severity '" << fail_on << "'\n";
+            return 2;
+        }
+    }
+    return 0;
+}
+
 // main
 
 int main(int argc, char** argv) {
@@ -551,8 +673,25 @@ int main(int argc, char** argv) {
                             "(defaults to the project path)");
     analyze_cmd->add_flag("--fix", apply_fix,
                           "Rewrite source files in place, applying each finding's suggested fix");
+    std::string shard_spec, shard_out;
+    analyze_cmd->add_option("--shard", shard_spec,
+                            "Analyze only shard K of N (\"K/N\", 0-based) for distributed runs");
+    analyze_cmd->add_option("--shard-out", shard_out,
+                            "Write this shard's partial artifact (findings + symbols + edges) to FILE");
 
-    // list-rules 
+    // merge (Phase 23): combine shard artifacts into the whole-program result
+    auto* merge_cmd = app.add_subcommand(
+        "merge", "Merge shard artifacts, run cross-TU rules, and report");
+    std::vector<std::string> merge_inputs;
+    std::string merge_sarif, merge_json, merge_fail_on, merge_min_conf;
+    merge_cmd->add_option("artifacts", merge_inputs, "Shard artifact JSON files")->required();
+    merge_cmd->add_option("--sarif", merge_sarif, "Write SARIF report to FILE");
+    merge_cmd->add_option("--json",  merge_json,  "Write JSON report to FILE");
+    merge_cmd->add_option("--fail-on", merge_fail_on, "Exit non-zero if any issue at or above SEVERITY");
+    merge_cmd->add_option("--min-confidence", merge_min_conf,
+                          "Only report findings at or above CONFIDENCE (low|medium|high)");
+
+    // list-rules
     auto* list_rules_cmd = app.add_subcommand("list-rules", "List all available analysis rules");
 
     // dump-ast
@@ -564,9 +703,26 @@ int main(int argc, char** argv) {
     CLI11_PARSE(app, argc, argv);
 
     if (*analyze_cmd) {
+        int shard_index = 0, shard_count = 1;
+        if (!shard_spec.empty()) {
+            auto slash = shard_spec.find('/');
+            if (slash == std::string::npos) {
+                std::cerr << "--shard expects \"K/N\" (e.g. 0/4)\n"; return 2;
+            }
+            try {
+                shard_index = std::stoi(shard_spec.substr(0, slash));
+                shard_count = std::stoi(shard_spec.substr(slash + 1));
+            } catch (...) { std::cerr << "--shard expects integers \"K/N\"\n"; return 2; }
+            if (shard_count < 1 || shard_index < 0 || shard_index >= shard_count) {
+                std::cerr << "--shard out of range: need 0 <= K < N\n"; return 2;
+            }
+        }
         return cmd_analyze(analyze_path, json_out, html_out, sarif_out, fail_on,
                            baseline, min_confidence, cache_dir, bazel_aquery, exec_root,
-                           apply_fix);
+                           apply_fix, shard_index, shard_count, shard_out);
+    }
+    if (*merge_cmd) {
+        return cmd_merge(merge_inputs, merge_sarif, merge_json, merge_fail_on, merge_min_conf);
     }
     if (*list_rules_cmd) {
         return cmd_list_rules();

@@ -26,6 +26,7 @@
 #include "perfguardian/project_loader.hpp"
 #include "perfguardian/autofix.hpp"
 #include "perfguardian/nolint.hpp"
+#include "perfguardian/shard.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
@@ -1028,6 +1029,87 @@ TEST(Config, MergesNestedDirectories) {
     EXPECT_TRUE(has001);
     EXPECT_TRUE(has006);
     fs::remove_all(root);
+}
+
+// ── Phase 23 — Distributed sharding ───────────────────────────────────────────
+
+TEST(Shard, PartitionCoversEveryTuOnce) {
+    const int n = 4;
+    const std::size_t tus = 30;
+    std::vector<int> hits(tus, 0);
+    for (int k = 0; k < n; ++k)
+        for (std::size_t i = 0; i < tus; ++i)
+            if (perfguardian::tu_in_shard(i, k, n)) hits[i]++;
+    for (std::size_t i = 0; i < tus; ++i) EXPECT_EQ(hits[i], 1);  // exactly one shard
+    // Single-shard mode keeps everything.
+    for (std::size_t i = 0; i < tus; ++i)
+        EXPECT_TRUE(perfguardian::tu_in_shard(i, 0, 1));
+}
+
+TEST(Shard, ArtifactRoundTrips) {
+    namespace fs = std::filesystem;
+    perfguardian::ShardArtifact a;
+    a.shard_index = 1; a.shard_count = 3;
+    perfguardian::Diagnostic d;
+    d.rule_id = "PG001"; d.severity = perfguardian::Severity::High;
+    d.confidence = perfguardian::Confidence::High;
+    d.location = {"x.cpp", 5, 2}; d.message = "msg";
+    d.fixits.push_back({5, 8, 5, 13, "const Big& b"});
+    a.findings.push_back(d);
+    perfguardian::SymbolSummary sym;
+    sym.usr = "c:@F@f"; sym.qualified_name = "f()"; sym.file = "x.cpp";
+    sym.is_definition = true; sym.max_param_size = 64;
+    a.symbols.push_back(sym);
+    a.edges = {{"c:@F@a", "c:@F@f"}};
+
+    auto path = (fs::temp_directory_path() / "pg_shard.json").string();
+    perfguardian::write_shard(path, a);
+    auto b = perfguardian::read_shard(path);
+
+    EXPECT_EQ(b.shard_index, 1);
+    ASSERT_EQ(b.findings.size(), 1u);
+    EXPECT_EQ(b.findings[0].rule_id, "PG001");
+    EXPECT_EQ(b.findings[0].severity, perfguardian::Severity::High);
+    ASSERT_EQ(b.findings[0].fixits.size(), 1u);
+    EXPECT_EQ(b.findings[0].fixits[0].replacement, "const Big& b");
+    ASSERT_EQ(b.symbols.size(), 1u);
+    EXPECT_EQ(b.symbols[0].max_param_size, 64);
+    ASSERT_EQ(b.edges.size(), 1u);
+    EXPECT_EQ(b.edges[0].second, "c:@F@f");
+    fs::remove(path);
+}
+
+TEST(Shard, MergeRecoversCrossTuFinding) {
+    // Shard A: the definition of process(Big) (256B by-value) + one caller.
+    // Shard B: two more callers, in different files, but NOT the definition.
+    // Neither shard can fire PG007; the merge must.
+    perfguardian::ShardArtifact a, b;
+    a.symbols.push_back([&]{
+        perfguardian::SymbolSummary s;
+        s.usr = "c:@F@process"; s.qualified_name = "process(Big)"; s.file = "big.cpp";
+        s.is_definition = true; s.max_param_size = 256; s.max_param_type = "Big";
+        s.max_param_name = "b"; return s; }());
+    a.edges = {{"c:@F@a", "c:@F@process"}};
+    b.edges = {{"c:@F@b", "c:@F@process"}, {"c:@F@c", "c:@F@process"}};
+    // Caller symbols so file-spread can be counted at merge.
+    for (auto [usr, file] : {std::pair{"c:@F@a","a.cpp"}, {"c:@F@b","b.cpp"}, {"c:@F@c","c.cpp"}}) {
+        perfguardian::SymbolSummary s; s.usr = usr; s.file = file; s.is_definition = true;
+        (file == std::string("a.cpp") ? a : b).symbols.push_back(s);
+    }
+
+    // Merge exactly as cmd_merge does.
+    perfguardian::GlobalSymbolIndex idx;
+    perfguardian::CallGraph cg;
+    perfguardian::DiagnosticSink sink;
+    for (const auto* art : {&a, &b}) {
+        for (const auto& s : art->symbols) idx.merge(s);
+        for (const auto& [caller, callee] : art->edges) cg.add_edge(caller, callee);
+    }
+    cg.prune_to(idx);
+    perfguardian::run_cross_tu_rules(idx, cg, sink, {});
+
+    ASSERT_EQ(sink.count(), 1u);
+    EXPECT_EQ(sink.all()[0].rule_id, "PG007");
 }
 
 // ── Phase 17 — Global symbol index ────────────────────────────────────────────

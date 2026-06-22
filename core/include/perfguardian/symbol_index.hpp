@@ -30,6 +30,10 @@ public:
     // than one TU, a definition takes precedence over a forward declaration.
     void add(const ParseResult& result);
 
+    // Merge a pre-summarised symbol (e.g. from another shard's artifact), using
+    // the same definition-supersedes-declaration rule as add().
+    void merge(const SymbolSummary& s);
+
     // Resolve a symbol by USR, or nullptr if it is not in the index.
     const SymbolSummary* find(const std::string& usr) const;
 
