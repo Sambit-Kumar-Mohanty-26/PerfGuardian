@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20...4.3)
 
 project(PerfGuardian
-    VERSION 0.4.0
+    VERSION 1.0.0
     DESCRIPTION "C++ performance analyzer and automated code reviewer"
     LANGUAGES CXX
 )

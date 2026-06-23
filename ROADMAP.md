@@ -89,7 +89,7 @@ binary release.
 | **v0.2.1** (patch) | Phase 11 (mutation analysis) | Bundles the real-project parsing + the rule-accuracy fixes already on `main`; first build that is genuinely usable on outside projects |
 | **v0.3.0** (minor) | Pillar A complete (Phases 12–13) | Trustworthy results: confidence levels + precise PG001/PG002 |
 | **v0.4.0** (minor) | Pillar B complete (Phases 14–16) | Fast enough for large repos: parallel + incremental |
-| **v1.0.0** (major) | Pillar C complete (Phases 17–19) | Whole-program analysis — the milestone that makes it a "real" tool |
+| **v1.0.0** (major) | Pillars C **and** D complete (Phases 17–23) | Whole-program analysis + Bazel input, autofix, scale-out suppression, and distributed sharding — the milestone that makes it a "real" tool |
 | **v1.x** | Pillar D milestones | Bazel, autofix, scale-out, as each lands |
 
 **Release mechanics:** bump `core/include/perfguardian/version.hpp` + `CMakeLists.txt`
@@ -118,3 +118,4 @@ binary release.
 - ✅ **Phase 22 — suppression at scale** (inline NOLINT, hierarchical configs, baseline auto-seed gate)
 - ✅ **Phase 23 — distributed sharding** (`--shard K/N` + `merge`; leveldb 3-way shard == monolithic run) — **Pillar D complete**
 - 🎉 **All 24 phases (0–23) complete — entire roadmap done.**
+- 🚀 **Cutting v1.0.0** — ships Pillars C + D (whole-program analysis, Bazel input, autofix, scale-out suppression, distributed sharding).
