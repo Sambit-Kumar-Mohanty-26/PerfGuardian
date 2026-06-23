@@ -1,11 +1,16 @@
 # PerfGuardian Roadmap
 
+> **Status: complete.** All 24 phases (0–23) across four pillars are done and shipped in
+> **v1.0.0**. This file is kept as a design log — the plan that was executed, with the
+> "done when" criterion each phase actually met. ✅ markers and validation numbers below
+> record the result, not pending work.
+
 Path from a working single-project analyzer toward a large-scale, low-false-positive
 performance analysis tool. Phases 0–10 (engine, six rules, text/JSON/HTML/SARIF
-reports, baseline diffing, real multi-file project parsing) are complete.
+reports, baseline diffing, real multi-file project parsing) laid the foundation.
 
-The remaining work is grouped into **four pillars**, sequenced by leverage. Do them
-roughly in order — each makes the next more valuable.
+The work was grouped into **four pillars**, sequenced by leverage — each made the next
+more valuable.
 
 ---
 

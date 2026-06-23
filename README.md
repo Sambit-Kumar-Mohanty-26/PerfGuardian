@@ -13,6 +13,25 @@ appear.
 
 ---
 
+## Features
+
+- **Seven performance rules** over the real Clang AST — by-value copies, missing `const&`,
+  missing `reserve()`, lookups in loops, redundant map lookups, and a whole-program rule.
+- **Whole-program analysis** — a USR-keyed symbol index and cross-file call graph let it
+  answer "who calls this, across translation units" and flag costs a single-file pass can't see.
+- **Built for large repos** — parses translation units in parallel across all cores, with an
+  incremental on-disk cache so unchanged files are skipped on the next run.
+- **Distributed sharding** — split the work across machines (`--shard K/N`) and `merge` the
+  partial results back into one whole-program report.
+- **Autofix** — `--fix` rewrites source in place (e.g. `Player p` → `const Player& p`); SARIF
+  carries the same machine-applicable edits.
+- **Suppression at scale** — inline `// NOLINT`, hierarchical per-directory configs, and a
+  baseline gate that blocks only *new* issues.
+- **Drop-in for any build** — `compile_commands.json`, a Bazel `aquery` graph, or a bare folder.
+- **CI-native** — text, JSON, HTML, and SARIF 2.1.0 output; exit codes gate the build.
+
+---
+
 ## Install
 
 ### macOS / Linux (Homebrew)
@@ -82,6 +101,7 @@ command line through a param file instead of inlining it are skipped, with a war
 
 ```
 perfguardian analyze <path> [options]     Analyze a C++ project
+perfguardian merge <artifacts...>         Merge shard artifacts into one report (see Distributed analysis)
 perfguardian list-rules                   List all available rules
 perfguardian dump-ast <file>              Dump the Clang AST for one file (debugging)
 perfguardian --version                    Print version
@@ -103,6 +123,8 @@ perfguardian --help                       Full help text
 | `--exec-root DIR` | Bazel execution root for resolving relative paths in `--bazel-aquery` (defaults to `<path>`) |
 | `--fix` | Rewrite source files in place, applying each finding's suggested fix (currently PG001/PG002 parameter edits, e.g. `Player p` → `const Player& p`) |
 | `--baseline FILE` | Compare against a previous JSON report; with `--fail-on`, only **new** issues fail the run. If `FILE` doesn't exist it is seeded from this run (the run passes), so it works as a drop-in CI gate |
+| `--shard K/N` | Analyze only shard `K` of `N` (0-based) — one slice of the translation units, for distributed runs |
+| `--shard-out FILE` | Write this shard's partial artifact (findings + symbols + call edges) to `FILE`, to be combined with `merge` |
 
 ---
 
@@ -128,6 +150,70 @@ Run `perfguardian list-rules` for the live catalog.
   Parameter 'p' of type 'Player' is 800 bytes, passed by value
   Suggested fix: const Player&
 ```
+
+---
+
+## Whole-program analysis
+
+Most lint rules see one file at a time. PerfGuardian also builds a **cross-translation-unit
+view** of the whole project:
+
+- a **global symbol index** keyed by Clang USR, so a function defined in one file is the same
+  symbol as a call to it in another (definitions supersede forward declarations); and
+- a **call graph** of caller→callee edges across files, pruned to the project's own functions.
+
+This is what powers **PG007 (`hot-pass-by-value`)**: a function that takes a large object by
+value isn't just a local smell — if it's called from many sites across many files, the copy
+cost is multiplied program-wide and a single `const&` fix pays off everywhere. The caller count
+and file spread come from the call graph, so this finding is **impossible to produce from a
+single file**.
+
+On [google/leveldb](https://github.com/google/leveldb) (76 translation units) the index resolves
+**1,086 functions** across TUs and the call graph holds **1,238 internal edges**; the busiest
+function, `ToString()`, resolves to **27 callers across 11 files**.
+
+---
+
+## Performance
+
+PerfGuardian is built to stay fast on large repositories:
+
+| Stage | Mechanism | leveldb (76 TUs, 18 cores) |
+|---|---|---|
+| Parallel parsing | Thread pool over translation units; each keeps its own libclang index | ~80 s → **~6 s** (~13×) |
+| Incremental cache | `--cache-dir`: a content+args+version hash reuses unchanged TUs from disk | warm run **8.2 s → 0.16 s** (~53×) |
+| Bounded memory | Rules run per-TU and parsed bodies are discarded immediately | peak set by in-flight TUs, not repo size |
+
+Findings are byte-identical regardless of thread count, cache state, or shard layout — output is
+deterministically sorted by `(file, line, column, rule)`.
+
+---
+
+## Distributed analysis
+
+For very large codebases, split the translation units across machines and merge the results.
+Each shard analyzes a deterministic slice and writes a partial artifact (its findings, symbol
+summaries, and call-graph edges):
+
+```bash
+# Machine 0 of 3
+perfguardian analyze . --shard 0/3 --shard-out shard0.json
+# Machine 1 of 3
+perfguardian analyze . --shard 1/3 --shard-out shard1.json
+# Machine 2 of 3
+perfguardian analyze . --shard 2/3 --shard-out shard2.json
+```
+
+Then `merge` unions the symbol indexes and call graphs, prunes to the project, and runs the
+cross-TU rules over the reconstructed whole-program view — recovering findings (like PG007) that
+no single shard could see. The merge step needs **no compiler**, only the JSON artifacts:
+
+```bash
+perfguardian merge shard0.json shard1.json shard2.json --sarif results.sarif --fail-on high
+```
+
+The merged result is identical to a single monolithic run. (On leveldb, a 3-way shard merges
+back to the same 1,086 symbols, 1,238 edges, and 69 findings.)
 
 ---
 
@@ -260,22 +346,32 @@ The MinGW64 `bin` directory must be on `PATH` at runtime so the bundled
 ## How it works
 
 ```
-C++ project + compile_commands.json
+  compile_commands.json · Bazel aquery · or a bare folder
         │
         ▼
-   Project loader ──► Clang AST parser (libclang)
+  Project loader ──► sources + compile args   (optional --shard slice)
         │
         ▼
-   Symbol database  (types, sizes, functions, call sites)
+  ┌─────────────────────── parallel over TUs ───────────────────────┐
+  │  Clang AST parser (libclang)        ◄──► incremental cache (disk) │
+  │        │ per-TU ParseResult                                       │
+  │        ├─► intra-TU rules (PG001–PG006) ──► DiagnosticSink        │
+  │        ├─► global symbol index   (USR → SymbolSummary)            │
+  │        └─► call graph            (caller → callee edges)          │
+  └──────────────────────────────────────────────────────────────────┘
+        │
+        ▼                                  (--shard-out writes a partial
+  cross-TU rules (PG007) over the           artifact here; `merge` rejoins
+  merged symbol index + call graph          shards before this step)
         │
         ▼
-   Rule engine  ──►  Hotspot ranker
+  suppressions (config · NOLINT) ──► confidence filter ──► hotspot ranker
         │
         ▼
-   Reporters  ──►  text · JSON · HTML · SARIF
+  reporters: text · JSON · HTML · SARIF      autofix (--fix)
         │
         ▼
-   CI gate (exit codes, baseline diff)
+  CI gate: exit codes · baseline diff
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design.
